@@ -33,16 +33,19 @@ object PlayerAppearanceGenerator {
         val skin = skinColor(appearance.skinTone)
         val hair = colorFromCode(appearance.hairColor)
         val eyes = colorFromCode(appearance.eyeColor)
+        val jersey = floatArrayOf(0.12f, 0.22f, 0.75f, 1f)
 
-        // Corps
+        // TORSE
         addPart(
             parts, "Torso",
             0f, 1.13f * heightScale, 0f,
-            0.25f * bodyScale, 0.34f * heightScale, 0.14f * bodyScale,
-            floatArrayOf(0.12f, 0.22f, 0.75f, 1f)
+            0.25f * bodyScale,
+            0.34f * heightScale,
+            0.14f * bodyScale,
+            jersey
         )
 
-        // Cou
+        // COU
         addPart(
             parts, "Neck",
             0f, 1.48f * heightScale, 0f,
@@ -50,7 +53,7 @@ object PlayerAppearanceGenerator {
             skin
         )
 
-        // Tête et forme du visage
+        // TETE
         val headWidth = when (appearance.headShape) {
             0 -> 0.135f
             1 -> 0.155f
@@ -68,7 +71,7 @@ object PlayerAppearanceGenerator {
             skin
         )
 
-        // Mâchoire
+        // MACHOIRE
         addPart(
             parts, "Jaw",
             0f, 1.635f * heightScale, 0.025f,
@@ -78,7 +81,7 @@ object PlayerAppearanceGenerator {
             skin
         )
 
-        // Oreilles
+        // OREILLES
         addPart(
             parts, "LeftEar",
             -headWidth, 1.72f * heightScale, 0f,
@@ -91,7 +94,7 @@ object PlayerAppearanceGenerator {
             0.035f, 0.065f, 0.035f, skin
         )
 
-        // Nez
+        // NEZ
         addPart(
             parts, "Nose",
             0f, 1.705f * heightScale, 0.12f,
@@ -101,7 +104,7 @@ object PlayerAppearanceGenerator {
             skin
         )
 
-        // Yeux
+        // YEUX
         val eyeWidth = 0.038f
         val eyeHeight = when (appearance.eyeShape) {
             0 -> 0.018f
@@ -123,7 +126,7 @@ object PlayerAppearanceGenerator {
             floatArrayOf(0.96f, 0.96f, 0.93f, 1f)
         )
 
-        // Iris
+        // IRIS
         addPart(
             parts, "LeftIris",
             -0.052f, 1.755f * heightScale, 0.123f,
@@ -136,7 +139,7 @@ object PlayerAppearanceGenerator {
             0.014f, 0.014f, 0.009f, eyes
         )
 
-        // Bouche
+        // BOUCHE
         addPart(
             parts, "Mouth",
             0f, 1.625f * heightScale, 0.105f,
@@ -144,7 +147,7 @@ object PlayerAppearanceGenerator {
             floatArrayOf(0.38f, 0.12f, 0.12f, 1f)
         )
 
-        // Cheveux
+        // CHEVEUX
         addPart(
             parts, "Hair",
             0f, 1.84f * heightScale, -0.005f,
@@ -152,7 +155,7 @@ object PlayerAppearanceGenerator {
             hair
         )
 
-        // Barbe
+        // BARBE
         if (appearance.facialHair > 0) {
             addPart(
                 parts, "Beard",
@@ -162,47 +165,148 @@ object PlayerAppearanceGenerator {
             )
         }
 
-        // Bras
+        // BRAS GAUCHE : TROIS SEGMENTS
+
         addPart(
-            parts, "LeftArm",
-            -0.29f * bodyScale, 1.16f * heightScale, 0f,
-            0.075f, 0.28f * heightScale, 0.075f,
+            parts, "LeftUpperArm",
+            -0.29f * bodyScale,
+            1.31f * heightScale,
+            0f,
+            0.073f * bodyScale,
+            0.16f * heightScale,
+            0.073f * bodyScale,
             skin
         )
 
         addPart(
-            parts, "RightArm",
-            0.29f * bodyScale, 1.16f * heightScale, 0f,
-            0.075f, 0.28f * heightScale, 0.075f,
+            parts, "LeftForearm",
+            -0.29f * bodyScale,
+            1.045f * heightScale,
+            0f,
+            0.065f * bodyScale,
+            0.145f * heightScale,
+            0.065f * bodyScale,
             skin
         )
 
-        // Mains
         addPart(
             parts, "LeftHand",
-            -0.29f * bodyScale, 0.86f * heightScale, 0f,
-            0.065f, 0.075f, 0.055f, skin
+            -0.29f * bodyScale,
+            0.86f * heightScale,
+            0f,
+            0.065f, 0.075f, 0.055f,
+            skin
+        )
+
+        // BRAS DROIT : TROIS SEGMENTS
+
+        addPart(
+            parts, "RightUpperArm",
+            0.29f * bodyScale,
+            1.31f * heightScale,
+            0f,
+            0.073f * bodyScale,
+            0.16f * heightScale,
+            0.073f * bodyScale,
+            skin
+        )
+
+        addPart(
+            parts, "RightForearm",
+            0.29f * bodyScale,
+            1.045f * heightScale,
+            0f,
+            0.065f * bodyScale,
+            0.145f * heightScale,
+            0.065f * bodyScale,
+            skin
         )
 
         addPart(
             parts, "RightHand",
-            0.29f * bodyScale, 0.86f * heightScale, 0f,
-            0.065f, 0.075f, 0.055f, skin
+            0.29f * bodyScale,
+            0.86f * heightScale,
+            0f,
+            0.065f, 0.075f, 0.055f,
+            skin
         )
 
-        // Jambes
-        addPart(
-            parts, "LeftLeg",
-            -0.115f, 0.48f * heightScale, 0f,
-            0.09f, 0.43f * heightScale, 0.10f,
-            floatArrayOf(0.12f, 0.22f, 0.75f, 1f)
-        )
+        // JAMBE GAUCHE : CUISSE
 
         addPart(
-            parts, "RightLeg",
-            0.115f, 0.48f * heightScale, 0f,
-            0.09f, 0.43f * heightScale, 0.10f,
-            floatArrayOf(0.12f, 0.22f, 0.75f, 1f)
+            parts, "LeftThigh",
+            -0.115f,
+            0.65f * heightScale,
+            0f,
+            0.09f,
+            0.26f * heightScale,
+            0.10f,
+            jersey
+        )
+
+        // JAMBE GAUCHE : MOLLET
+
+        addPart(
+            parts, "LeftCalf",
+            -0.115f,
+            0.205f * heightScale,
+            0f,
+            0.067f,
+            0.205f * heightScale,
+            0.075f,
+            skin
+        )
+
+        // PIED GAUCHE
+
+        addPart(
+            parts, "LeftFoot",
+            -0.115f,
+            0.055f * heightScale,
+            0.065f,
+            0.075f,
+            0.055f,
+            0.14f,
+            floatArrayOf(0.045f, 0.045f, 0.045f, 1f)
+        )
+
+        // JAMBE DROITE : CUISSE
+
+        addPart(
+            parts, "RightThigh",
+            0.115f,
+            0.65f * heightScale,
+            0f,
+            0.09f,
+            0.26f * heightScale,
+            0.10f,
+            jersey
+        )
+
+        // JAMBE DROITE : MOLLET
+
+        addPart(
+            parts, "RightCalf",
+            0.115f,
+            0.205f * heightScale,
+            0f,
+            0.067f,
+            0.205f * heightScale,
+            0.075f,
+            skin
+        )
+
+        // PIED DROIT
+
+        addPart(
+            parts, "RightFoot",
+            0.115f,
+            0.055f * heightScale,
+            0.065f,
+            0.075f,
+            0.055f,
+            0.14f,
+            floatArrayOf(0.045f, 0.045f, 0.045f, 1f)
         )
 
         return GeneratedPlayerModel(player.id, parts)
@@ -239,15 +343,19 @@ object PlayerAppearanceGenerator {
         ry: Float,
         rz: Float
     ): FloatArray {
+
         val vertices = ArrayList<Float>()
+
         val latitudeSegments = 12
         val longitudeSegments = 16
 
         for (latitude in 0 until latitudeSegments) {
+
             val theta1 = PI * latitude / latitudeSegments
             val theta2 = PI * (latitude + 1) / latitudeSegments
 
             for (longitude in 0 until longitudeSegments) {
+
                 val phi1 = 2.0 * PI * longitude / longitudeSegments
                 val phi2 = 2.0 * PI * (longitude + 1) / longitudeSegments
 
@@ -265,10 +373,16 @@ object PlayerAppearanceGenerator {
     }
 
     private fun point(
-        cx: Float, cy: Float, cz: Float,
-        rx: Float, ry: Float, rz: Float,
-        theta: Double, phi: Double
+        cx: Float,
+        cy: Float,
+        cz: Float,
+        rx: Float,
+        ry: Float,
+        rz: Float,
+        theta: Double,
+        phi: Double
     ): FloatArray {
+
         val x = rx * sin(theta) * cos(phi)
         val y = ry * cos(theta)
         val z = rz * sin(theta) * sin(phi)
@@ -294,6 +408,7 @@ object PlayerAppearanceGenerator {
     }
 
     private fun skinColor(tone: Int): FloatArray {
+
         val colors = listOf(
             floatArrayOf(0.96f, 0.77f, 0.62f, 1f),
             floatArrayOf(0.82f, 0.57f, 0.40f, 1f),
@@ -306,6 +421,7 @@ object PlayerAppearanceGenerator {
     }
 
     private fun colorFromCode(code: Int): FloatArray {
+
         val colors = listOf(
             floatArrayOf(0.08f, 0.05f, 0.03f, 1f),
             floatArrayOf(0.30f, 0.15f, 0.07f, 1f),
