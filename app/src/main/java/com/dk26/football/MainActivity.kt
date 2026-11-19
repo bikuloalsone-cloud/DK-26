@@ -60,18 +60,31 @@ private class DK26Renderer : GLSurfaceView.Renderer {
     private var matrixHandle = -1
     private var colorHandle = -1
 
-    private var pitchBuffer = 0
+    private var pitchLightBuffer = 0
+    private var pitchDarkBuffer = 0
     private var linesBuffer = 0
 
-    private var pitchVertexCount = 0
+    private var pitchLightCount = 0
+    private var pitchDarkCount = 0
     private var linesVertexCount = 0
+
+    private data class PlayerBatch(
+        val bufferId: Int,
+        val vertexCount: Int,
+        val color: FloatArray
+    )
+
+    private val playerBatches = mutableListOf<PlayerBatch>()
 
     private val projection = FloatArray(16)
     private val view = FloatArray(16)
     private val viewProjection = FloatArray(16)
 
-    private val pitchColor =
-        floatArrayOf(0.035f, 0.29f, 0.085f, 1f)
+    private val pitchLightColor =
+        floatArrayOf(0.035f, 0.31f, 0.09f, 1f)
+
+    private val pitchDarkColor =
+        floatArrayOf(0.025f, 0.25f, 0.065f, 1f)
 
     private val lineColor =
         floatArrayOf(0.96f, 0.97f, 0.92f, 1f)
@@ -131,16 +144,26 @@ private class DK26Renderer : GLSurfaceView.Renderer {
             return
         }
 
-        // Construction unique des géométries fixes.
+        // Terrain avec bandes alternées.
         val pitch = buildPitch()
+
+        pitchLightCount = pitch.first.size / 3
+        pitchDarkCount = pitch.second.size / 3
+
+        pitchLightBuffer =
+            uploadStaticGeometry(pitch.first)
+
+        pitchDarkBuffer =
+            uploadStaticGeometry(pitch.second)
+
+        // Lignes, surfaces et buts.
         val lines = buildPitchLines()
 
-        pitchVertexCount = pitch.size / 3
         linesVertexCount = lines.size / 3
-
-        // Transfert des géométries vers la mémoire GPU.
-        pitchBuffer = uploadStaticGeometry(pitch)
         linesBuffer = uploadStaticGeometry(lines)
+
+        // Génération et regroupement des 22 joueurs.
+        buildPlayers()
     }
 
     override fun onSurfaceChanged(
@@ -192,22 +215,26 @@ private class DK26Renderer : GLSurfaceView.Renderer {
                 GLES20.GL_DEPTH_BUFFER_BIT
         )
 
-        if (program == 0 ||
-            pitchBuffer == 0 ||
-            linesBuffer == 0
-        ) return
+        if (program == 0) return
 
         GLES20.glUseProgram(program)
 
-        // Terrain : un seul appel graphique.
+        // 1. Terrain.
         drawStaticBuffer(
-            pitchBuffer,
-            pitchVertexCount,
+            pitchLightBuffer,
+            pitchLightCount,
             GLES20.GL_TRIANGLES,
-            pitchColor
+            pitchLightColor
         )
 
-        // Marquages et buts : un seul appel graphique.
+        drawStaticBuffer(
+            pitchDarkBuffer,
+            pitchDarkCount,
+            GLES20.GL_TRIANGLES,
+            pitchDarkColor
+        )
+
+        // 2. Marquages et buts.
         GLES20.glLineWidth(2f)
 
         drawStaticBuffer(
@@ -217,6 +244,16 @@ private class DK26Renderer : GLSurfaceView.Renderer {
             lineColor
         )
 
+        // 3. Les 22 joueurs.
+        for (batch in playerBatches) {
+            drawStaticBuffer(
+                batch.bufferId,
+                batch.vertexCount,
+                GLES20.GL_TRIANGLES,
+                batch.color
+            )
+        }
+
         GLES20.glBindBuffer(
             GLES20.GL_ARRAY_BUFFER,
             0
@@ -224,21 +261,125 @@ private class DK26Renderer : GLSurfaceView.Renderer {
     }
 
     // -------------------------------------------------
+    // GENERATION DES JOUEURS
+    // -------------------------------------------------
+
+    private data class CpuPlayerBatch(
+        val color: FloatArray,
+        val vertices: MutableList<Float>
+    )
+
+    private fun buildPlayers() {
+
+        playerBatches.clear()
+
+        val groups = LinkedHashMap<String, CpuPlayerBatch>()
+
+        val teams = MatchTeamSetup.createMatch()
+
+        for (team in teams) {
+
+            for (matchPlayer in team.players) {
+
+                val model = matchPlayer.model
+
+                for (part in model.geometry.parts) {
+
+                    val vertices = part.vertices
+                    val color = part.color
+
+                    if (color.size < 4) continue
+                    if (vertices.size < 9) continue
+
+                    val key = color.joinToString("|") {
+                        java.lang.Float.floatToIntBits(it).toString()
+                    }
+
+                    val batch = groups.getOrPut(key) {
+                        CpuPlayerBatch(
+                            color = color.copyOf(),
+                            vertices = ArrayList()
+                        )
+                    }
+
+                    val redTeam =
+                        matchPlayer.team == TeamSide.RED
+
+                    // Translation et orientation du joueur.
+                    // L'équipe rouge est tournée de 180 degrés.
+                    var index = 0
+
+                    while (index + 2 < vertices.size) {
+
+                        val localX = vertices[index]
+                        val localY = vertices[index + 1]
+                        val localZ = vertices[index + 2]
+
+                        val worldX = if (redTeam) {
+                            matchPlayer.x - localX
+                        } else {
+                            matchPlayer.x + localX
+                        }
+
+                        val worldZ = if (redTeam) {
+                            matchPlayer.z - localZ
+                        } else {
+                            matchPlayer.z + localZ
+                        }
+
+                        batch.vertices.add(worldX)
+                        batch.vertices.add(localY + 0.025f)
+                        batch.vertices.add(worldZ)
+
+                        index += 3
+                    }
+                }
+            }
+        }
+
+        // Un VBO par couleur au lieu d'un VBO par partie de joueur.
+        for (batch in groups.values) {
+
+            val data = FloatArray(batch.vertices.size) {
+                batch.vertices[it]
+            }
+
+            val bufferId = uploadStaticGeometry(data)
+
+            if (bufferId != 0) {
+                playerBatches.add(
+                    PlayerBatch(
+                        bufferId = bufferId,
+                        vertexCount = data.size / 3,
+                        color = batch.color
+                    )
+                )
+            }
+        }
+    }
+
+    // -------------------------------------------------
     // TERRAIN
     // -------------------------------------------------
 
-    private fun buildPitch(): FloatArray {
+    private fun buildPitch(): Pair<FloatArray, FloatArray> {
 
-        val vertices = FloatArrayBuilder()
+        val light = FloatArrayBuilder()
+        val dark = FloatArrayBuilder()
 
-        // Dix bandes de gazon.
         for (i in 0 until 10) {
 
             val left = -34f + i * 6.8f
             val right = left + 6.8f
 
+            val destination = if (i % 2 == 0) {
+                light
+            } else {
+                dark
+            }
+
             addRectangle(
-                vertices,
+                destination,
                 left,
                 -52.5f,
                 right,
@@ -247,7 +388,10 @@ private class DK26Renderer : GLSurfaceView.Renderer {
             )
         }
 
-        return vertices.toArray()
+        return Pair(
+            light.toArray(),
+            dark.toArray()
+        )
     }
 
     private fun addRectangle(
@@ -279,13 +423,11 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         val lines = FloatArrayBuilder()
         val y = 0.045f
 
-        // Contour du terrain.
         addLine(lines, -34f, y, -52.5f, 34f, y, -52.5f)
         addLine(lines, 34f, y, -52.5f, 34f, y, 52.5f)
         addLine(lines, 34f, y, 52.5f, -34f, y, 52.5f)
         addLine(lines, -34f, y, 52.5f, -34f, y, -52.5f)
 
-        // Ligne centrale et cercle central.
         addLine(lines, -34f, y, 0f, 34f, y, 0f)
         addCircle(lines, 0f, y, 0f, 9.15f)
 
@@ -307,11 +449,9 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         addLine(lines, 9.16f, y, 52.5f, 9.16f, y, 47f)
         addLine(lines, -9.16f, y, 47f, 9.16f, y, 47f)
 
-        // Points de penalty.
         addCircle(lines, 0f, y, -41.5f, 0.18f)
         addCircle(lines, 0f, y, 41.5f, 0.18f)
 
-        // Deux buts.
         addGoal(lines, -52.5f)
         addGoal(lines, 52.5f)
 
@@ -328,7 +468,6 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         val direction = if (z < 0f) -1f else 1f
         val backZ = z + direction * 2.5f
 
-        // Montants et barre transversale.
         addLine(lines, -halfWidth, 0f, z,
             -halfWidth, height, z)
 
@@ -338,7 +477,6 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         addLine(lines, -halfWidth, height, z,
             halfWidth, height, z)
 
-        // Profondeur du filet.
         addLine(lines, -halfWidth, 0f, z,
             -halfWidth, 0f, backZ)
 
@@ -398,7 +536,7 @@ private class DK26Renderer : GLSurfaceView.Renderer {
     }
 
     // -------------------------------------------------
-    // GPU : STOCKAGE DES GEOMETRIES
+    // GPU
     // -------------------------------------------------
 
     private fun uploadStaticGeometry(
@@ -410,6 +548,8 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         val ids = IntArray(1)
 
         GLES20.glGenBuffers(1, ids, 0)
+
+        if (ids[0] == 0) return 0
 
         val buffer = ByteBuffer
             .allocateDirect(
@@ -447,6 +587,8 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         mode: Int,
         color: FloatArray
     ) {
+
+        if (bufferId == 0 || vertexCount == 0) return
 
         GLES20.glBindBuffer(
             GLES20.GL_ARRAY_BUFFER,
@@ -572,7 +714,7 @@ private class DK26Renderer : GLSurfaceView.Renderer {
 }
 
 // -----------------------------------------------------
-// CONSTRUCTEUR DE TABLEAUX : UTILISE A LA CONSTRUCTION
+// CONSTRUCTEUR DE TABLEAUX
 // -----------------------------------------------------
 
 private class FloatArrayBuilder(initialCapacity: Int = 1024) {
@@ -594,6 +736,7 @@ private class FloatArrayBuilder(initialCapacity: Int = 1024) {
         val required = count + extra
 
         if (required > values.size) {
+
             var newSize = values.size * 2
 
             while (newSize < required) {
