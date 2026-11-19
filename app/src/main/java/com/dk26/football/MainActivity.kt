@@ -11,7 +11,6 @@ import android.view.View
 import android.view.WindowManager
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.nio.FloatBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 import kotlin.math.cos
@@ -57,17 +56,30 @@ class MainActivity : Activity() {
 private class DK26Renderer : GLSurfaceView.Renderer {
 
     private var program = 0
-    private var positionHandle = 0
-    private var matrixHandle = 0
-    private var colorHandle = 0
+    private var positionHandle = -1
+    private var matrixHandle = -1
+    private var colorHandle = -1
+
+    private var pitchBuffer = 0
+    private var linesBuffer = 0
+
+    private var pitchVertexCount = 0
+    private var linesVertexCount = 0
 
     private val projection = FloatArray(16)
     private val view = FloatArray(16)
     private val viewProjection = FloatArray(16)
 
+    private val pitchColor =
+        floatArrayOf(0.035f, 0.29f, 0.085f, 1f)
+
+    private val lineColor =
+        floatArrayOf(0.96f, 0.97f, 0.92f, 1f)
+
     private val vertexShader = """
         attribute vec3 aPosition;
         uniform mat4 uMVP;
+
         void main() {
             gl_Position = uMVP * vec4(aPosition, 1.0);
         }
@@ -76,6 +88,7 @@ private class DK26Renderer : GLSurfaceView.Renderer {
     private val fragmentShader = """
         precision mediump float;
         uniform vec4 uColor;
+
         void main() {
             gl_FragColor = uColor;
         }
@@ -85,17 +98,49 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         gl: GL10?,
         config: EGLConfig?
     ) {
-        GLES20.glClearColor(0.025f, 0.12f, 0.045f, 1f)
+        GLES20.glClearColor(
+            0.025f, 0.12f, 0.045f, 1f
+        )
+
         GLES20.glEnable(GLES20.GL_DEPTH_TEST)
         GLES20.glDepthFunc(GLES20.GL_LEQUAL)
 
-        program = createProgram(vertexShader, fragmentShader)
+        GLES20.glDisable(GLES20.GL_CULL_FACE)
 
-        if (program != 0) {
-            positionHandle = GLES20.glGetAttribLocation(program, "aPosition")
-            matrixHandle = GLES20.glGetUniformLocation(program, "uMVP")
-            colorHandle = GLES20.glGetUniformLocation(program, "uColor")
+        program = createProgram(
+            vertexShader,
+            fragmentShader
+        )
+
+        if (program == 0) return
+
+        positionHandle =
+            GLES20.glGetAttribLocation(program, "aPosition")
+
+        matrixHandle =
+            GLES20.glGetUniformLocation(program, "uMVP")
+
+        colorHandle =
+            GLES20.glGetUniformLocation(program, "uColor")
+
+        if (positionHandle < 0 ||
+            matrixHandle < 0 ||
+            colorHandle < 0
+        ) {
+            program = 0
+            return
         }
+
+        // Construction unique des géométries fixes.
+        val pitch = buildPitch()
+        val lines = buildPitchLines()
+
+        pitchVertexCount = pitch.size / 3
+        linesVertexCount = lines.size / 3
+
+        // Transfert des géométries vers la mémoire GPU.
+        pitchBuffer = uploadStaticGeometry(pitch)
+        linesBuffer = uploadStaticGeometry(lines)
     }
 
     override fun onSurfaceChanged(
@@ -103,9 +148,15 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         width: Int,
         height: Int
     ) {
-        GLES20.glViewport(0, 0, width, height)
+        val safeWidth = width.coerceAtLeast(1)
+        val safeHeight = height.coerceAtLeast(1)
 
-        val aspect = width.toFloat() / height.coerceAtLeast(1)
+        GLES20.glViewport(
+            0, 0, safeWidth, safeHeight
+        )
+
+        val aspect =
+            safeWidth.toFloat() / safeHeight.toFloat()
 
         Matrix.perspectiveM(
             projection,
@@ -135,66 +186,110 @@ private class DK26Renderer : GLSurfaceView.Renderer {
     }
 
     override fun onDrawFrame(gl: GL10?) {
+
         GLES20.glClear(
             GLES20.GL_COLOR_BUFFER_BIT or
-            GLES20.GL_DEPTH_BUFFER_BIT
+                GLES20.GL_DEPTH_BUFFER_BIT
         )
 
-        if (program == 0) return
+        if (program == 0 ||
+            pitchBuffer == 0 ||
+            linesBuffer == 0
+        ) return
 
         GLES20.glUseProgram(program)
 
-        drawPitch()
-        drawPitchMarkings()
-        drawGoals()
+        // Terrain : un seul appel graphique.
+        drawStaticBuffer(
+            pitchBuffer,
+            pitchVertexCount,
+            GLES20.GL_TRIANGLES,
+            pitchColor
+        )
+
+        // Marquages et buts : un seul appel graphique.
+        GLES20.glLineWidth(2f)
+
+        drawStaticBuffer(
+            linesBuffer,
+            linesVertexCount,
+            GLES20.GL_LINES,
+            lineColor
+        )
+
+        GLES20.glBindBuffer(
+            GLES20.GL_ARRAY_BUFFER,
+            0
+        )
     }
 
-    private fun drawPitch() {
-        // Dimensions du terrain : 105 m x 68 m.
-        drawRectangle(
-            -34f, -52.5f,
-            34f, 52.5f,
-            0f,
-            floatArrayOf(0.035f, 0.29f, 0.085f, 1f)
-        )
+    // -------------------------------------------------
+    // TERRAIN
+    // -------------------------------------------------
 
-        // Bandes de gazon créées par géométrie.
-        val stripeColors = arrayOf(
-            floatArrayOf(0.045f, 0.34f, 0.105f, 1f),
-            floatArrayOf(0.035f, 0.29f, 0.085f, 1f)
-        )
+    private fun buildPitch(): FloatArray {
 
+        val vertices = FloatArrayBuilder()
+
+        // Dix bandes de gazon.
         for (i in 0 until 10) {
+
             val left = -34f + i * 6.8f
             val right = left + 6.8f
 
-            drawRectangle(
-                left, -52.5f,
-                right, 52.5f,
-                0.015f,
-                stripeColors[i % 2]
+            addRectangle(
+                vertices,
+                left,
+                -52.5f,
+                right,
+                52.5f,
+                0.015f
             )
         }
+
+        return vertices.toArray()
     }
 
-    private fun drawPitchMarkings() {
-        val lines = ArrayList<Float>()
+    private fun addRectangle(
+        list: FloatArrayBuilder,
+        left: Float,
+        nearZ: Float,
+        right: Float,
+        farZ: Float,
+        y: Float
+    ) {
 
+        list.add(
+            left, y, nearZ,
+            right, y, nearZ,
+            left, y, farZ,
+
+            right, y, nearZ,
+            right, y, farZ,
+            left, y, farZ
+        )
+    }
+
+    // -------------------------------------------------
+    // LIGNES ET BUTS
+    // -------------------------------------------------
+
+    private fun buildPitchLines(): FloatArray {
+
+        val lines = FloatArrayBuilder()
         val y = 0.045f
 
-        // Contour extérieur.
+        // Contour du terrain.
         addLine(lines, -34f, y, -52.5f, 34f, y, -52.5f)
         addLine(lines, 34f, y, -52.5f, 34f, y, 52.5f)
         addLine(lines, 34f, y, 52.5f, -34f, y, 52.5f)
         addLine(lines, -34f, y, 52.5f, -34f, y, -52.5f)
 
-        // Ligne centrale.
+        // Ligne centrale et cercle central.
         addLine(lines, -34f, y, 0f, 34f, y, 0f)
-
-        // Cercle central.
         addCircle(lines, 0f, y, 0f, 9.15f)
 
-        // Surface de réparation.
+        // Surfaces de réparation.
         addLine(lines, -20.16f, y, -52.5f, -20.16f, y, -36f)
         addLine(lines, 20.16f, y, -52.5f, 20.16f, y, -36f)
         addLine(lines, -20.16f, y, -36f, 20.16f, y, -36f)
@@ -203,7 +298,7 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         addLine(lines, 20.16f, y, 52.5f, 20.16f, y, 36f)
         addLine(lines, -20.16f, y, 36f, 20.16f, y, 36f)
 
-        // Surface de but.
+        // Surfaces de but.
         addLine(lines, -9.16f, y, -52.5f, -9.16f, y, -47f)
         addLine(lines, 9.16f, y, -52.5f, 9.16f, y, -47f)
         addLine(lines, -9.16f, y, -47f, 9.16f, y, -47f)
@@ -216,116 +311,76 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         addCircle(lines, 0f, y, -41.5f, 0.18f)
         addCircle(lines, 0f, y, 41.5f, 0.18f)
 
-        drawLines(
-            lines.toFloatArray(),
-            floatArrayOf(0.96f, 0.97f, 0.92f, 1f)
-        )
+        // Deux buts.
+        addGoal(lines, -52.5f)
+        addGoal(lines, 52.5f)
+
+        return lines.toArray()
     }
 
-    private fun drawGoals() {
-        val goals = ArrayList<Float>()
+    private fun addGoal(
+        lines: FloatArrayBuilder,
+        z: Float
+    ) {
 
         val halfWidth = 3.66f
-        val goalHeight = 2.44f
+        val height = 2.44f
+        val direction = if (z < 0f) -1f else 1f
+        val backZ = z + direction * 2.5f
 
-        // But côté nord.
-        addLine(goals, -halfWidth, 0f, -52.5f,
-            -halfWidth, goalHeight, -52.5f)
-        addLine(goals, halfWidth, 0f, -52.5f,
-            halfWidth, goalHeight, -52.5f)
-        addLine(goals, -halfWidth, goalHeight, -52.5f,
-            halfWidth, goalHeight, -52.5f)
+        // Montants et barre transversale.
+        addLine(lines, -halfWidth, 0f, z,
+            -halfWidth, height, z)
+
+        addLine(lines, halfWidth, 0f, z,
+            halfWidth, height, z)
+
+        addLine(lines, -halfWidth, height, z,
+            halfWidth, height, z)
 
         // Profondeur du filet.
-        addLine(goals, -halfWidth, 0f, -52.5f,
-            -halfWidth, 0f, -55f)
-        addLine(goals, halfWidth, 0f, -52.5f,
-            halfWidth, 0f, -55f)
-        addLine(goals, -halfWidth, goalHeight, -52.5f,
-            -halfWidth, goalHeight, -55f)
-        addLine(goals, halfWidth, goalHeight, -52.5f,
-            halfWidth, goalHeight, -55f)
-        addLine(goals, -halfWidth, goalHeight, -55f,
-            halfWidth, goalHeight, -55f)
-        addLine(goals, -halfWidth, 0f, -55f,
-            halfWidth, 0f, -55f)
+        addLine(lines, -halfWidth, 0f, z,
+            -halfWidth, 0f, backZ)
 
-        // But côté sud.
-        addLine(goals, -halfWidth, 0f, 52.5f,
-            -halfWidth, goalHeight, 52.5f)
-        addLine(goals, halfWidth, 0f, 52.5f,
-            halfWidth, goalHeight, 52.5f)
-        addLine(goals, -halfWidth, goalHeight, 52.5f,
-            halfWidth, goalHeight, 52.5f)
+        addLine(lines, halfWidth, 0f, z,
+            halfWidth, 0f, backZ)
 
-        addLine(goals, -halfWidth, 0f, 52.5f,
-            -halfWidth, 0f, 55f)
-        addLine(goals, halfWidth, 0f, 52.5f,
-            halfWidth, 0f, 55f)
-        addLine(goals, -halfWidth, goalHeight, 52.5f,
-            -halfWidth, goalHeight, 55f)
-        addLine(goals, halfWidth, goalHeight, 52.5f,
-            halfWidth, goalHeight, 55f)
-        addLine(goals, -halfWidth, goalHeight, 55f,
-            halfWidth, goalHeight, 55f)
-        addLine(goals, -halfWidth, 0f, 55f,
-            halfWidth, 0f, 55f)
+        addLine(lines, -halfWidth, height, z,
+            -halfWidth, height, backZ)
 
-        drawLines(
-            goals.toFloatArray(),
-            floatArrayOf(0.98f, 0.98f, 0.95f, 1f)
-        )
-    }
+        addLine(lines, halfWidth, height, z,
+            halfWidth, height, backZ)
 
-    private fun drawRectangle(
-        left: Float,
-        nearZ: Float,
-        right: Float,
-        farZ: Float,
-        y: Float,
-        color: FloatArray
-    ) {
-        val vertices = floatArrayOf(
-            left, y, nearZ,
-            right, y, nearZ,
-            left, y, farZ,
+        addLine(lines, -halfWidth, height, backZ,
+            halfWidth, height, backZ)
 
-            right, y, nearZ,
-            right, y, farZ,
-            left, y, farZ
-        )
-
-        draw(
-            vertices,
-            GLES20.GL_TRIANGLES,
-            color
-        )
+        addLine(lines, -halfWidth, 0f, backZ,
+            halfWidth, 0f, backZ)
     }
 
     private fun addLine(
-        list: MutableList<Float>,
+        list: FloatArrayBuilder,
         x1: Float, y1: Float, z1: Float,
         x2: Float, y2: Float, z2: Float
     ) {
-        list.add(x1)
-        list.add(y1)
-        list.add(z1)
-
-        list.add(x2)
-        list.add(y2)
-        list.add(z2)
+        list.add(
+            x1, y1, z1,
+            x2, y2, z2
+        )
     }
 
     private fun addCircle(
-        list: MutableList<Float>,
+        list: FloatArrayBuilder,
         cx: Float,
         y: Float,
         cz: Float,
         radius: Float
     ) {
+
         val segments = 96
 
         for (i in 0 until segments) {
+
             val a1 = 2.0 * Math.PI * i / segments
             val a2 = 2.0 * Math.PI * (i + 1) / segments
 
@@ -334,6 +389,7 @@ private class DK26Renderer : GLSurfaceView.Renderer {
                 cx + radius * cos(a1).toFloat(),
                 y,
                 cz + radius * sin(a1).toFloat(),
+
                 cx + radius * cos(a2).toFloat(),
                 y,
                 cz + radius * sin(a2).toFloat()
@@ -341,29 +397,65 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         }
     }
 
-    private fun drawLines(
-        vertices: FloatArray,
-        color: FloatArray
-    ) {
-        draw(vertices, GLES20.GL_LINES, color)
-    }
+    // -------------------------------------------------
+    // GPU : STOCKAGE DES GEOMETRIES
+    // -------------------------------------------------
 
-    private fun draw(
-        vertices: FloatArray,
-        mode: Int,
-        color: FloatArray
-    ) {
-        if (vertices.isEmpty()) return
+    private fun uploadStaticGeometry(
+        vertices: FloatArray
+    ): Int {
 
-        val buffer: FloatBuffer = ByteBuffer
-            .allocateDirect(vertices.size * 4)
+        if (vertices.isEmpty()) return 0
+
+        val ids = IntArray(1)
+
+        GLES20.glGenBuffers(1, ids, 0)
+
+        val buffer = ByteBuffer
+            .allocateDirect(
+                vertices.size * Float.SIZE_BYTES
+            )
             .order(ByteOrder.nativeOrder())
             .asFloatBuffer()
 
         buffer.put(vertices)
         buffer.position(0)
 
-        GLES20.glEnableVertexAttribArray(positionHandle)
+        GLES20.glBindBuffer(
+            GLES20.GL_ARRAY_BUFFER,
+            ids[0]
+        )
+
+        GLES20.glBufferData(
+            GLES20.GL_ARRAY_BUFFER,
+            vertices.size * Float.SIZE_BYTES,
+            buffer,
+            GLES20.GL_STATIC_DRAW
+        )
+
+        GLES20.glBindBuffer(
+            GLES20.GL_ARRAY_BUFFER,
+            0
+        )
+
+        return ids[0]
+    }
+
+    private fun drawStaticBuffer(
+        bufferId: Int,
+        vertexCount: Int,
+        mode: Int,
+        color: FloatArray
+    ) {
+
+        GLES20.glBindBuffer(
+            GLES20.GL_ARRAY_BUFFER,
+            bufferId
+        )
+
+        GLES20.glEnableVertexAttribArray(
+            positionHandle
+        )
 
         GLES20.glVertexAttribPointer(
             positionHandle,
@@ -371,7 +463,7 @@ private class DK26Renderer : GLSurfaceView.Renderer {
             GLES20.GL_FLOAT,
             false,
             0,
-            buffer
+            0
         )
 
         GLES20.glUniformMatrix4fv(
@@ -389,21 +481,26 @@ private class DK26Renderer : GLSurfaceView.Renderer {
             0
         )
 
-        GLES20.glLineWidth(2.2f)
-
         GLES20.glDrawArrays(
             mode,
             0,
-            vertices.size / 3
+            vertexCount
         )
 
-        GLES20.glDisableVertexAttribArray(positionHandle)
+        GLES20.glDisableVertexAttribArray(
+            positionHandle
+        )
     }
+
+    // -------------------------------------------------
+    // SHADERS
+    // -------------------------------------------------
 
     private fun createProgram(
         vertexSource: String,
         fragmentSource: String
     ): Int {
+
         val vertex = compileShader(
             GLES20.GL_VERTEX_SHADER,
             vertexSource
@@ -414,7 +511,11 @@ private class DK26Renderer : GLSurfaceView.Renderer {
             fragmentSource
         )
 
-        if (vertex == 0 || fragment == 0) return 0
+        if (vertex == 0 || fragment == 0) {
+            if (vertex != 0) GLES20.glDeleteShader(vertex)
+            if (fragment != 0) GLES20.glDeleteShader(fragment)
+            return 0
+        }
 
         val result = GLES20.glCreateProgram()
 
@@ -446,6 +547,7 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         type: Int,
         source: String
     ): Int {
+
         val shader = GLES20.glCreateShader(type)
 
         GLES20.glShaderSource(shader, source)
@@ -466,5 +568,43 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         }
 
         return shader
+    }
+}
+
+// -----------------------------------------------------
+// CONSTRUCTEUR DE TABLEAUX : UTILISE A LA CONSTRUCTION
+// -----------------------------------------------------
+
+private class FloatArrayBuilder(initialCapacity: Int = 1024) {
+
+    private var values = FloatArray(initialCapacity)
+    private var count = 0
+
+    fun add(vararg data: Float) {
+
+        ensureCapacity(data.size)
+
+        for (value in data) {
+            values[count++] = value
+        }
+    }
+
+    private fun ensureCapacity(extra: Int) {
+
+        val required = count + extra
+
+        if (required > values.size) {
+            var newSize = values.size * 2
+
+            while (newSize < required) {
+                newSize *= 2
+            }
+
+            values = values.copyOf(newSize)
+        }
+    }
+
+    fun toArray(): FloatArray {
+        return values.copyOf(count)
     }
 }
