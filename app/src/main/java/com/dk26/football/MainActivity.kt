@@ -30,9 +30,9 @@ class MainActivity : Activity() {
         @Suppress("DEPRECATION")
         window.decorView.systemUiVisibility =
             View.SYSTEM_UI_FLAG_FULLSCREEN or
-            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
-            View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
 
         gameView = GLSurfaceView(this).apply {
             setEGLContextClientVersion(2)
@@ -86,6 +86,11 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         val vertices: FloatArrayBuilder
     )
 
+    private data class BonePartTransform(
+        val bindPosition: BonePosition,
+        val animatedBone: AnimatedBone
+    )
+
     private val playerBatches = mutableListOf<PlayerBatch>()
     private val animatedPlayers = mutableListOf<AnimatedPlayer>()
 
@@ -126,9 +131,7 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         gl: GL10?,
         config: EGLConfig?
     ) {
-        GLES20.glClearColor(
-            0.025f, 0.12f, 0.045f, 1f
-        )
+        GLES20.glClearColor(0.025f, 0.12f, 0.045f, 1f)
 
         GLES20.glEnable(GLES20.GL_DEPTH_TEST)
         GLES20.glDepthFunc(GLES20.GL_LEQUAL)
@@ -225,12 +228,10 @@ private class DK26Renderer : GLSurfaceView.Renderer {
 
         lastFrameNanos = now
 
-        // Actualisation des animations individuelles.
         updateAnimatedPlayers(deltaSeconds)
 
         GLES20.glUseProgram(program)
 
-        // Terrain.
         drawStaticBuffer(
             pitchLightBuffer,
             pitchLightCount,
@@ -245,7 +246,6 @@ private class DK26Renderer : GLSurfaceView.Renderer {
             pitchDarkColor
         )
 
-        // Lignes et buts.
         GLES20.glLineWidth(2f)
 
         drawStaticBuffer(
@@ -255,7 +255,6 @@ private class DK26Renderer : GLSurfaceView.Renderer {
             lineColor
         )
 
-        // Joueurs animés.
         for (batch in playerBatches) {
             drawStaticBuffer(
                 batch.bufferId,
@@ -285,10 +284,8 @@ private class DK26Renderer : GLSurfaceView.Renderer {
 
                 val model = matchPlayer.model
 
-                // Animation de course pour cette version.
                 model.setAction(PlayerAction.RUN)
 
-                // Décalage initial des phases d'animation.
                 model.update(
                     deltaSeconds = animationOffset * 0.003f,
                     movementSpeed = 0.85f
@@ -307,7 +304,7 @@ private class DK26Renderer : GLSurfaceView.Renderer {
     }
 
     // -------------------------------------------------
-    // ANIMATION ET MISE A JOUR DES GEOMETRIES
+    // ANIMATION ET TRANSFORMATIONS SQUELETTIQUES
     // -------------------------------------------------
 
     private fun updateAnimatedPlayers(deltaSeconds: Float) {
@@ -324,7 +321,9 @@ private class DK26Renderer : GLSurfaceView.Renderer {
                 movementSpeed = 0.85f
             )
 
-            val pose = model.currentPose ?: continue
+            val animatedBones = model.animatedBones
+            if (animatedBones.isEmpty()) continue
+
             val redTeam = matchPlayer.team == TeamSide.RED
 
             for (part in animatedPlayer.parts) {
@@ -333,6 +332,12 @@ private class DK26Renderer : GLSurfaceView.Renderer {
                 val color = part.color
 
                 if (color.size < 4 || vertices.size < 9) continue
+
+                val boneTransform = getPartBoneTransform(
+                    part.name,
+                    model.skeleton.bones,
+                    animatedBones
+                )
 
                 val key = color.joinToString("|") {
                     java.lang.Float.floatToIntBits(it).toString()
@@ -345,27 +350,34 @@ private class DK26Renderer : GLSurfaceView.Renderer {
                     )
                 }
 
-                val transform = getPartTransform(part.name, pose)
+                // Un tableau temporaire par partie, et non par sommet.
+                val transformed = FloatArray(3)
 
                 var index = 0
 
                 while (index + 2 < vertices.size) {
 
-                    var x = vertices[index]
-                    var y = vertices[index + 1]
-                    var z = vertices[index + 2]
+                    val originalX = vertices[index]
+                    val originalY = vertices[index + 1]
+                    val originalZ = vertices[index + 2]
 
-                    if (transform != null) {
-                        val result = animateVertex(
-                            x, y, z,
-                            transform.first,
-                            transform.second
+                    if (boneTransform != null) {
+                        transformVertex(
+                            originalX,
+                            originalY,
+                            originalZ,
+                            boneTransform,
+                            transformed
                         )
-
-                        x = result[0]
-                        y = result[1]
-                        z = result[2]
+                    } else {
+                        transformed[0] = originalX
+                        transformed[1] = originalY
+                        transformed[2] = originalZ
                     }
+
+                    val x = transformed[0]
+                    val y = transformed[1]
+                    val z = transformed[2]
 
                     val worldX = if (redTeam) {
                         matchPlayer.x - x
@@ -394,147 +406,145 @@ private class DK26Renderer : GLSurfaceView.Renderer {
     }
 
     // -------------------------------------------------
-    // ASSOCIATION DES PARTIES DU CORPS AUX ANIMATIONS
+    // ASSOCIATION DES PARTIES AUX OS
     // -------------------------------------------------
 
-    private fun getPartTransform(
+    private fun getPartBoneTransform(
         partName: String,
-        pose: PlayerPose
-    ): Pair<JointTransform, FloatArray>? {
+        definitions: List<BoneDefinition>,
+        animatedBones: List<AnimatedBone>
+    ): BonePartTransform? {
 
         val name = partName.lowercase(Locale.ROOT)
 
-        return when {
+        val bone = when {
 
-            name.contains("leftarm") ||
-            name.contains("leftforearm") ||
-            name.contains("lefthand") ||
-            name.contains("leftsleeve") -> {
-                Pair(
-                    pose.leftArm,
-                    floatArrayOf(-0.25f, 1.36f, 0f)
-                )
-            }
+            name.contains("leftboot") ->
+                PlayerBone.LEFT_FOOT
 
-            name.contains("rightarm") ||
-            name.contains("rightforearm") ||
-            name.contains("righthand") ||
-            name.contains("rightsleeve") -> {
-                Pair(
-                    pose.rightArm,
-                    floatArrayOf(0.25f, 1.36f, 0f)
-                )
-            }
+            name.contains("rightboot") ->
+                PlayerBone.RIGHT_FOOT
+
+            name.contains("leftsock") ->
+                PlayerBone.LEFT_CALF
+
+            name.contains("rightsock") ->
+                PlayerBone.RIGHT_CALF
 
             name.contains("leftleg") ||
-            name.contains("leftsock") ||
-            name.contains("leftboot") ||
-            name.contains("leftthigh") ||
-            name.contains("leftcalf") -> {
-                Pair(
-                    pose.leftLeg,
-                    floatArrayOf(-0.115f, 0.88f, 0f)
-                )
-            }
+                name.contains("leftthigh") ->
+                PlayerBone.LEFT_THIGH
 
             name.contains("rightleg") ||
-            name.contains("rightsock") ||
-            name.contains("rightboot") ||
-            name.contains("rightthigh") ||
-            name.contains("rightcalf") -> {
-                Pair(
-                    pose.rightLeg,
-                    floatArrayOf(0.115f, 0.88f, 0f)
-                )
-            }
+                name.contains("rightthigh") ->
+                PlayerBone.RIGHT_THIGH
+
+            name.contains("leftarm") ||
+                name.contains("leftsleeve") ->
+                PlayerBone.LEFT_SHOULDER
+
+            name.contains("rightarm") ||
+                name.contains("rightsleeve") ->
+                PlayerBone.RIGHT_SHOULDER
+
+            name.contains("lefthand") ->
+                PlayerBone.LEFT_HAND
+
+            name.contains("righthand") ->
+                PlayerBone.RIGHT_HAND
+
+            name.contains("neck") ->
+                PlayerBone.NECK
 
             name.contains("head") ||
-            name.contains("jaw") ||
-            name.contains("ear") ||
-            name.contains("nose") ||
-            name.contains("eye") ||
-            name.contains("iris") ||
-            name.contains("pupil") ||
-            name.contains("eyebrow") ||
-            name.contains("mouth") ||
-            name.contains("lip") ||
-            name.contains("hair") ||
-            name.contains("beard") ||
-            name.contains("cheek") ||
-            name.contains("chin") -> {
-                Pair(
-                    pose.head,
-                    floatArrayOf(0f, 1.65f, 0f)
-                )
-            }
+                name.contains("jaw") ||
+                name.contains("ear") ||
+                name.contains("nose") ||
+                name.contains("eye") ||
+                name.contains("iris") ||
+                name.contains("pupil") ||
+                name.contains("eyebrow") ||
+                name.contains("mouth") ||
+                name.contains("lip") ||
+                name.contains("hair") ||
+                name.contains("beard") ||
+                name.contains("cheek") ||
+                name.contains("chin") ->
+                PlayerBone.HEAD
 
             name.contains("torso") ||
-            name.contains("jersey") -> {
-                Pair(
-                    pose.torso,
-                    floatArrayOf(0f, 1.1f, 0f)
-                )
-            }
+                name.contains("jersey") ->
+                PlayerBone.CHEST
+
+            name.contains("shorts") ->
+                PlayerBone.PELVIS
 
             else -> null
-        }
+        } ?: return null
+
+        val definition = definitions.firstOrNull {
+            it.bone == bone
+        } ?: return null
+
+        val animated = animatedBones.firstOrNull {
+            it.bone == bone
+        } ?: return null
+
+        return BonePartTransform(
+            bindPosition = definition.bindPosition,
+            animatedBone = animated
+        )
     }
 
     // -------------------------------------------------
-    // ROTATION DES VERTICES AUTOUR DES ARTICULATIONS
+    // TRANSFORMATION DES SOMMETS AVEC LES OS
     // -------------------------------------------------
 
-    private fun animateVertex(
-        originalX: Float,
-        originalY: Float,
-        originalZ: Float,
-        transform: JointTransform,
-        pivot: FloatArray
-    ): FloatArray {
+    private fun transformVertex(
+        x: Float,
+        y: Float,
+        z: Float,
+        transform: BonePartTransform,
+        output: FloatArray
+    ) {
 
-        val px = pivot[0]
-        val py = pivot[1]
-        val pz = pivot[2]
+        val bind = transform.bindPosition
+        val animated = transform.animatedBone
 
-        var x = originalX - px
-        var y = originalY - py
-        var z = originalZ - pz
+        // Position du sommet par rapport à son articulation.
+        val localX = x - bind.x
+        val localY = y - bind.y
+        val localZ = z - bind.z
+
+        val rotation = animated.rotation
+
+        val cx = cos(rotation.x)
+        val sx = sin(rotation.x)
+
+        val cy = cos(rotation.y)
+        val sy = sin(rotation.y)
+
+        val cz = cos(rotation.z)
+        val sz = sin(rotation.z)
 
         // Rotation X.
-        val cx = cos(transform.rotationX)
-        val sx = sin(transform.rotationX)
-
-        val y1 = y * cx - z * sx
-        val z1 = y * sx + z * cx
-
-        y = y1
-        z = z1
+        val x1 = localX
+        val y1 = localY * cx - localZ * sx
+        val z1 = localY * sx + localZ * cx
 
         // Rotation Y.
-        val cy = cos(transform.rotationY)
-        val sy = sin(transform.rotationY)
-
-        val x2 = x * cy + z * sy
-        val z2 = -x * sy + z * cy
-
-        x = x2
-        z = z2
+        val x2 = x1 * cy + z1 * sy
+        val y2 = y1
+        val z2 = -x1 * sy + z1 * cy
 
         // Rotation Z.
-        val cz = cos(transform.rotationZ)
-        val sz = sin(transform.rotationZ)
+        val x3 = x2 * cz - y2 * sz
+        val y3 = x2 * sz + y2 * cz
 
-        val x3 = x * cz - y * sz
-        val y3 = x * sz + y * cz
-
-        x = x3
-        y = y3
-
-        return floatArrayOf(
-            x + px + transform.offsetX,
-            y + py + transform.offsetY,
-            z + pz + transform.offsetZ
-        )
+        // Position finale dans l'espace du joueur.
+        output[0] = animated.position.x + x3
+        output[1] = animated.position.y + y3
+        output[2] = animated.position.z + z2
     }
 
     // -------------------------------------------------
