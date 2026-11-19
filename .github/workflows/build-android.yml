@@ -28,13 +28,17 @@ jobs:
       - name: Install Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android platform
+      - name: Accept Android SDK licenses and install platform
+        shell: bash
         run: |
+          set -o pipefail
+          yes | sdkmanager --licenses
           sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Install Gradle
+        shell: bash
         run: |
-          curl -L https://services.gradle.org/distributions/gradle-8.11.1-bin.zip -o gradle.zip
+          curl -fL https://services.gradle.org/distributions/gradle-8.11.1-bin.zip -o gradle.zip
           unzip -q gradle.zip -d "$HOME"
           echo "$HOME/gradle-8.11.1/bin" >> "$GITHUB_PATH"
 
