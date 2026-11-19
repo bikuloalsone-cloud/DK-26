@@ -1,6 +1,9 @@
 
 package com.dk26.football
 
+import kotlin.math.cos
+import kotlin.math.sin
+
 enum class PlayerBone {
     ROOT,
     PELVIS,
@@ -57,61 +60,197 @@ class PlayerSkeleton private constructor(
     val bones: List<BoneDefinition>
 ) {
 
+    private data class BoneTransform(
+        val position: BonePosition,
+        val rotation: BoneRotation
+    )
+
     fun applyPose(pose: PlayerPose): List<AnimatedBone> {
-        return bones.map { definition ->
 
-            val transform = when (definition.bone) {
-                PlayerBone.ROOT,
-                PlayerBone.PELVIS,
-                PlayerBone.SPINE,
-                PlayerBone.CHEST -> pose.torso
+        val calculated = HashMap<PlayerBone, BoneTransform>(bones.size)
+        val result = ArrayList<AnimatedBone>(bones.size)
 
-                PlayerBone.NECK,
-                PlayerBone.HEAD -> pose.head
+        for (definition in bones) {
 
-                PlayerBone.LEFT_SHOULDER,
-                PlayerBone.LEFT_UPPER_ARM,
-                PlayerBone.LEFT_FOREARM,
-                PlayerBone.LEFT_HAND -> pose.leftArm
+            val bone = definition.bone
+            val parent = definition.parent
 
-                PlayerBone.RIGHT_SHOULDER,
-                PlayerBone.RIGHT_UPPER_ARM,
-                PlayerBone.RIGHT_FOREARM,
-                PlayerBone.RIGHT_HAND -> pose.rightArm
+            val localRotation = when (bone) {
+                PlayerBone.SPINE -> BoneRotation(
+                    pose.torso.rotationX,
+                    pose.torso.rotationY,
+                    pose.torso.rotationZ
+                )
 
-                PlayerBone.LEFT_THIGH,
-                PlayerBone.LEFT_CALF,
-                PlayerBone.LEFT_FOOT -> pose.leftLeg
+                PlayerBone.HEAD -> BoneRotation(
+                    pose.head.rotationX,
+                    pose.head.rotationY,
+                    pose.head.rotationZ
+                )
 
-                PlayerBone.RIGHT_THIGH,
-                PlayerBone.RIGHT_CALF,
-                PlayerBone.RIGHT_FOOT -> pose.rightLeg
+                PlayerBone.LEFT_SHOULDER -> BoneRotation(
+                    pose.leftArm.rotationX,
+                    pose.leftArm.rotationY,
+                    pose.leftArm.rotationZ
+                )
+
+                PlayerBone.RIGHT_SHOULDER -> BoneRotation(
+                    pose.rightArm.rotationX,
+                    pose.rightArm.rotationY,
+                    pose.rightArm.rotationZ
+                )
+
+                PlayerBone.LEFT_THIGH -> BoneRotation(
+                    pose.leftLeg.rotationX,
+                    pose.leftLeg.rotationY,
+                    pose.leftLeg.rotationZ
+                )
+
+                PlayerBone.RIGHT_THIGH -> BoneRotation(
+                    pose.rightLeg.rotationX,
+                    pose.rightLeg.rotationY,
+                    pose.rightLeg.rotationZ
+                )
+
+                else -> BoneRotation()
             }
 
-            val rotation = BoneRotation(
-                x = transform.rotationX,
-                y = transform.rotationY,
-                z = transform.rotationZ
+            val localOffset = when (bone) {
+                PlayerBone.ROOT -> BonePosition(
+                    pose.torso.offsetX,
+                    pose.torso.offsetY,
+                    pose.torso.offsetZ
+                )
+
+                PlayerBone.LEFT_SHOULDER -> BonePosition(
+                    pose.leftArm.offsetX,
+                    pose.leftArm.offsetY,
+                    pose.leftArm.offsetZ
+                )
+
+                PlayerBone.RIGHT_SHOULDER -> BonePosition(
+                    pose.rightArm.offsetX,
+                    pose.rightArm.offsetY,
+                    pose.rightArm.offsetZ
+                )
+
+                PlayerBone.LEFT_THIGH -> BonePosition(
+                    pose.leftLeg.offsetX,
+                    pose.leftLeg.offsetY,
+                    pose.leftLeg.offsetZ
+                )
+
+                PlayerBone.RIGHT_THIGH -> BonePosition(
+                    pose.rightLeg.offsetX,
+                    pose.rightLeg.offsetY,
+                    pose.rightLeg.offsetZ
+                )
+
+                PlayerBone.HEAD -> BonePosition(
+                    pose.head.offsetX,
+                    pose.head.offsetY,
+                    pose.head.offsetZ
+                )
+
+                else -> BonePosition(0f, 0f, 0f)
+            }
+
+            val localPosition = BonePosition(
+                definition.bindPosition.x + localOffset.x,
+                definition.bindPosition.y + localOffset.y,
+                definition.bindPosition.z + localOffset.z
             )
 
-            val position = BonePosition(
-                x = definition.bindPosition.x + transform.offsetX,
-                y = definition.bindPosition.y + transform.offsetY,
-                z = definition.bindPosition.z + transform.offsetZ
+            val parentTransform = if (parent != null) {
+                calculated[parent]
+            } else {
+                null
+            }
+
+            val worldPosition: BonePosition
+            val worldRotation: BoneRotation
+
+            if (parentTransform == null) {
+                worldPosition = localPosition
+                worldRotation = localRotation
+            } else {
+                val rotated = rotatePosition(
+                    localPosition,
+                    parentTransform.rotation
+                )
+
+                worldPosition = BonePosition(
+                    parentTransform.position.x + rotated.x,
+                    parentTransform.position.y + rotated.y,
+                    parentTransform.position.z + rotated.z
+                )
+
+                worldRotation = BoneRotation(
+                    parentTransform.rotation.x + localRotation.x,
+                    parentTransform.rotation.y + localRotation.y,
+                    parentTransform.rotation.z + localRotation.z
+                )
+            }
+
+            val transform = BoneTransform(
+                position = worldPosition,
+                rotation = worldRotation
             )
 
-            AnimatedBone(
-                bone = definition.bone,
-                parent = definition.parent,
-                position = position,
-                rotation = rotation
+            calculated[bone] = transform
+
+            result.add(
+                AnimatedBone(
+                    bone = bone,
+                    parent = parent,
+                    position = worldPosition,
+                    rotation = worldRotation
+                )
             )
         }
+
+        return result
+    }
+
+    private fun rotatePosition(
+        position: BonePosition,
+        rotation: BoneRotation
+    ): BonePosition {
+
+        val cx = cos(rotation.x)
+        val sx = sin(rotation.x)
+
+        val cy = cos(rotation.y)
+        val sy = sin(rotation.y)
+
+        val cz = cos(rotation.z)
+        val sz = sin(rotation.z)
+
+        // Rotation autour de X
+        val x1 = position.x
+        val y1 = position.y * cx - position.z * sx
+        val z1 = position.y * sx + position.z * cx
+
+        // Rotation autour de Y
+        val x2 = x1 * cy + z1 * sy
+        val y2 = y1
+        val z2 = -x1 * sy + z1 * cy
+
+        // Rotation autour de Z
+        val x3 = x2 * cz - y2 * sz
+        val y3 = x2 * sz + y2 * cz
+
+        return BonePosition(
+            x = x3,
+            y = y3,
+            z = z2
+        )
     }
 
     companion object {
 
         fun create(): PlayerSkeleton {
+
             val bones = listOf(
 
                 BoneDefinition(
