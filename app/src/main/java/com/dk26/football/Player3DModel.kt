@@ -61,7 +61,7 @@ class Player3DModel private constructor(
                 .generate(player)
                 .parts
                 .toMutableList()
-
+    parts.addAll(PlayerFace3D.generate(player))
             val heightScale = player.appearance.heightCm / 175f
             val bodyScale = when (player.appearance.bodyType) {
                 0 -> 0.88f
