@@ -11,6 +11,7 @@ import android.view.View
 import android.view.WindowManager
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.Locale
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 import kotlin.math.cos
@@ -69,16 +70,30 @@ private class DK26Renderer : GLSurfaceView.Renderer {
     private var linesVertexCount = 0
 
     private data class PlayerBatch(
+        val key: String,
         val bufferId: Int,
-        val vertexCount: Int,
+        var vertexCount: Int,
         val color: FloatArray
     )
 
+    private data class AnimatedPlayer(
+        val matchPlayer: MatchPlayer,
+        val parts: List<PlayerGeometryPart>
+    )
+
+    private data class CpuPlayerBatch(
+        val color: FloatArray,
+        val vertices: FloatArrayBuilder
+    )
+
     private val playerBatches = mutableListOf<PlayerBatch>()
+    private val animatedPlayers = mutableListOf<AnimatedPlayer>()
 
     private val projection = FloatArray(16)
     private val view = FloatArray(16)
     private val viewProjection = FloatArray(16)
+
+    private var lastFrameNanos = 0L
 
     private val pitchLightColor =
         floatArrayOf(0.035f, 0.31f, 0.09f, 1f)
@@ -117,13 +132,9 @@ private class DK26Renderer : GLSurfaceView.Renderer {
 
         GLES20.glEnable(GLES20.GL_DEPTH_TEST)
         GLES20.glDepthFunc(GLES20.GL_LEQUAL)
-
         GLES20.glDisable(GLES20.GL_CULL_FACE)
 
-        program = createProgram(
-            vertexShader,
-            fragmentShader
-        )
+        program = createProgram(vertexShader, fragmentShader)
 
         if (program == 0) return
 
@@ -144,26 +155,22 @@ private class DK26Renderer : GLSurfaceView.Renderer {
             return
         }
 
-        // Terrain avec bandes alternées.
         val pitch = buildPitch()
 
         pitchLightCount = pitch.first.size / 3
         pitchDarkCount = pitch.second.size / 3
 
-        pitchLightBuffer =
-            uploadStaticGeometry(pitch.first)
+        pitchLightBuffer = uploadStaticGeometry(pitch.first)
+        pitchDarkBuffer = uploadStaticGeometry(pitch.second)
 
-        pitchDarkBuffer =
-            uploadStaticGeometry(pitch.second)
-
-        // Lignes, surfaces et buts.
         val lines = buildPitchLines()
 
         linesVertexCount = lines.size / 3
         linesBuffer = uploadStaticGeometry(lines)
 
-        // Génération et regroupement des 22 joueurs.
         buildPlayers()
+
+        lastFrameNanos = System.nanoTime()
     }
 
     override fun onSurfaceChanged(
@@ -174,20 +181,12 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         val safeWidth = width.coerceAtLeast(1)
         val safeHeight = height.coerceAtLeast(1)
 
-        GLES20.glViewport(
-            0, 0, safeWidth, safeHeight
-        )
+        GLES20.glViewport(0, 0, safeWidth, safeHeight)
 
-        val aspect =
-            safeWidth.toFloat() / safeHeight.toFloat()
+        val aspect = safeWidth.toFloat() / safeHeight.toFloat()
 
         Matrix.perspectiveM(
-            projection,
-            0,
-            48f,
-            aspect,
-            1f,
-            250f
+            projection, 0, 48f, aspect, 1f, 250f
         )
 
         Matrix.setLookAtM(
@@ -199,12 +198,9 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         )
 
         Matrix.multiplyMM(
-            viewProjection,
-            0,
-            projection,
-            0,
-            view,
-            0
+            viewProjection, 0,
+            projection, 0,
+            view, 0
         )
     }
 
@@ -217,9 +213,24 @@ private class DK26Renderer : GLSurfaceView.Renderer {
 
         if (program == 0) return
 
+        val now = System.nanoTime()
+
+        val deltaSeconds = if (lastFrameNanos == 0L) {
+            0.016f
+        } else {
+            ((now - lastFrameNanos) / 1_000_000_000.0)
+                .toFloat()
+                .coerceIn(0f, 0.1f)
+        }
+
+        lastFrameNanos = now
+
+        // Actualisation des animations individuelles.
+        updateAnimatedPlayers(deltaSeconds)
+
         GLES20.glUseProgram(program)
 
-        // 1. Terrain.
+        // Terrain.
         drawStaticBuffer(
             pitchLightBuffer,
             pitchLightCount,
@@ -234,7 +245,7 @@ private class DK26Renderer : GLSurfaceView.Renderer {
             pitchDarkColor
         )
 
-        // 2. Marquages et buts.
+        // Lignes et buts.
         GLES20.glLineWidth(2f)
 
         drawStaticBuffer(
@@ -244,7 +255,7 @@ private class DK26Renderer : GLSurfaceView.Renderer {
             lineColor
         )
 
-        // 3. Les 22 joueurs.
+        // Joueurs animés.
         for (batch in playerBatches) {
             drawStaticBuffer(
                 batch.bufferId,
@@ -254,108 +265,364 @@ private class DK26Renderer : GLSurfaceView.Renderer {
             )
         }
 
-        GLES20.glBindBuffer(
-            GLES20.GL_ARRAY_BUFFER,
-            0
-        )
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
     }
 
     // -------------------------------------------------
-    // GENERATION DES JOUEURS
+    // CREATION DES JOUEURS
     // -------------------------------------------------
-
-    private data class CpuPlayerBatch(
-        val color: FloatArray,
-        val vertices: MutableList<Float>
-    )
 
     private fun buildPlayers() {
 
-        playerBatches.clear()
-
-        val groups = LinkedHashMap<String, CpuPlayerBatch>()
+        animatedPlayers.clear()
 
         val teams = MatchTeamSetup.createMatch()
 
-        for (team in teams) {
+        var animationOffset = 0
 
+        for (team in teams) {
             for (matchPlayer in team.players) {
 
                 val model = matchPlayer.model
 
-                for (part in model.geometry.parts) {
+                // Animation de course pour cette version.
+                model.setAction(PlayerAction.RUN)
 
-                    val vertices = part.vertices
-                    val color = part.color
+                // Décalage initial des phases d'animation.
+                model.update(
+                    deltaSeconds = animationOffset * 0.003f,
+                    movementSpeed = 0.85f
+                )
 
-                    if (color.size < 4) continue
-                    if (vertices.size < 9) continue
+                animatedPlayers.add(
+                    AnimatedPlayer(
+                        matchPlayer = matchPlayer,
+                        parts = model.geometry.parts
+                    )
+                )
 
-                    val key = color.joinToString("|") {
-                        java.lang.Float.floatToIntBits(it).toString()
-                    }
+                animationOffset++
+            }
+        }
+    }
 
-                    val batch = groups.getOrPut(key) {
-                        CpuPlayerBatch(
-                            color = color.copyOf(),
-                            vertices = ArrayList()
+    // -------------------------------------------------
+    // ANIMATION ET MISE A JOUR DES GEOMETRIES
+    // -------------------------------------------------
+
+    private fun updateAnimatedPlayers(deltaSeconds: Float) {
+
+        val groups = LinkedHashMap<String, CpuPlayerBatch>()
+
+        for (animatedPlayer in animatedPlayers) {
+
+            val matchPlayer = animatedPlayer.matchPlayer
+            val model = matchPlayer.model
+
+            model.update(
+                deltaSeconds = deltaSeconds,
+                movementSpeed = 0.85f
+            )
+
+            val pose = model.currentPose ?: continue
+            val redTeam = matchPlayer.team == TeamSide.RED
+
+            for (part in animatedPlayer.parts) {
+
+                val vertices = part.vertices
+                val color = part.color
+
+                if (color.size < 4 || vertices.size < 9) continue
+
+                val key = color.joinToString("|") {
+                    java.lang.Float.floatToIntBits(it).toString()
+                }
+
+                val batch = groups.getOrPut(key) {
+                    CpuPlayerBatch(
+                        color = color.copyOf(),
+                        vertices = FloatArrayBuilder()
+                    )
+                }
+
+                val transform = getPartTransform(part.name, pose)
+
+                var index = 0
+
+                while (index + 2 < vertices.size) {
+
+                    var x = vertices[index]
+                    var y = vertices[index + 1]
+                    var z = vertices[index + 2]
+
+                    if (transform != null) {
+                        val result = animateVertex(
+                            x, y, z,
+                            transform.first,
+                            transform.second
                         )
+
+                        x = result[0]
+                        y = result[1]
+                        z = result[2]
                     }
 
-                    val redTeam =
-                        matchPlayer.team == TeamSide.RED
-
-                    // Translation et orientation du joueur.
-                    // L'équipe rouge est tournée de 180 degrés.
-                    var index = 0
-
-                    while (index + 2 < vertices.size) {
-
-                        val localX = vertices[index]
-                        val localY = vertices[index + 1]
-                        val localZ = vertices[index + 2]
-
-                        val worldX = if (redTeam) {
-                            matchPlayer.x - localX
-                        } else {
-                            matchPlayer.x + localX
-                        }
-
-                        val worldZ = if (redTeam) {
-                            matchPlayer.z - localZ
-                        } else {
-                            matchPlayer.z + localZ
-                        }
-
-                        batch.vertices.add(worldX)
-                        batch.vertices.add(localY + 0.025f)
-                        batch.vertices.add(worldZ)
-
-                        index += 3
+                    val worldX = if (redTeam) {
+                        matchPlayer.x - x
+                    } else {
+                        matchPlayer.x + x
                     }
+
+                    val worldZ = if (redTeam) {
+                        matchPlayer.z - z
+                    } else {
+                        matchPlayer.z + z
+                    }
+
+                    batch.vertices.add(
+                        worldX,
+                        y + 0.025f,
+                        worldZ
+                    )
+
+                    index += 3
                 }
             }
         }
 
-        // Un VBO par couleur au lieu d'un VBO par partie de joueur.
-        for (batch in groups.values) {
+        updatePlayerGpuBuffers(groups)
+    }
 
-            val data = FloatArray(batch.vertices.size) {
-                batch.vertices[it]
-            }
+    // -------------------------------------------------
+    // ASSOCIATION DES PARTIES DU CORPS AUX ANIMATIONS
+    // -------------------------------------------------
 
-            val bufferId = uploadStaticGeometry(data)
+    private fun getPartTransform(
+        partName: String,
+        pose: PlayerPose
+    ): Pair<JointTransform, FloatArray>? {
 
-            if (bufferId != 0) {
-                playerBatches.add(
-                    PlayerBatch(
-                        bufferId = bufferId,
-                        vertexCount = data.size / 3,
-                        color = batch.color
-                    )
+        val name = partName.lowercase(Locale.ROOT)
+
+        return when {
+
+            name.contains("leftarm") ||
+            name.contains("leftforearm") ||
+            name.contains("lefthand") ||
+            name.contains("leftsleeve") -> {
+                Pair(
+                    pose.leftArm,
+                    floatArrayOf(-0.25f, 1.36f, 0f)
                 )
             }
+
+            name.contains("rightarm") ||
+            name.contains("rightforearm") ||
+            name.contains("righthand") ||
+            name.contains("rightsleeve") -> {
+                Pair(
+                    pose.rightArm,
+                    floatArrayOf(0.25f, 1.36f, 0f)
+                )
+            }
+
+            name.contains("leftleg") ||
+            name.contains("leftsock") ||
+            name.contains("leftboot") ||
+            name.contains("leftthigh") ||
+            name.contains("leftcalf") -> {
+                Pair(
+                    pose.leftLeg,
+                    floatArrayOf(-0.115f, 0.88f, 0f)
+                )
+            }
+
+            name.contains("rightleg") ||
+            name.contains("rightsock") ||
+            name.contains("rightboot") ||
+            name.contains("rightthigh") ||
+            name.contains("rightcalf") -> {
+                Pair(
+                    pose.rightLeg,
+                    floatArrayOf(0.115f, 0.88f, 0f)
+                )
+            }
+
+            name.contains("head") ||
+            name.contains("jaw") ||
+            name.contains("ear") ||
+            name.contains("nose") ||
+            name.contains("eye") ||
+            name.contains("iris") ||
+            name.contains("pupil") ||
+            name.contains("eyebrow") ||
+            name.contains("mouth") ||
+            name.contains("lip") ||
+            name.contains("hair") ||
+            name.contains("beard") ||
+            name.contains("cheek") ||
+            name.contains("chin") -> {
+                Pair(
+                    pose.head,
+                    floatArrayOf(0f, 1.65f, 0f)
+                )
+            }
+
+            name.contains("torso") ||
+            name.contains("jersey") -> {
+                Pair(
+                    pose.torso,
+                    floatArrayOf(0f, 1.1f, 0f)
+                )
+            }
+
+            else -> null
         }
+    }
+
+    // -------------------------------------------------
+    // ROTATION DES VERTICES AUTOUR DES ARTICULATIONS
+    // -------------------------------------------------
+
+    private fun animateVertex(
+        originalX: Float,
+        originalY: Float,
+        originalZ: Float,
+        transform: JointTransform,
+        pivot: FloatArray
+    ): FloatArray {
+
+        val px = pivot[0]
+        val py = pivot[1]
+        val pz = pivot[2]
+
+        var x = originalX - px
+        var y = originalY - py
+        var z = originalZ - pz
+
+        // Rotation X.
+        val cx = cos(transform.rotationX)
+        val sx = sin(transform.rotationX)
+
+        val y1 = y * cx - z * sx
+        val z1 = y * sx + z * cx
+
+        y = y1
+        z = z1
+
+        // Rotation Y.
+        val cy = cos(transform.rotationY)
+        val sy = sin(transform.rotationY)
+
+        val x2 = x * cy + z * sy
+        val z2 = -x * sy + z * cy
+
+        x = x2
+        z = z2
+
+        // Rotation Z.
+        val cz = cos(transform.rotationZ)
+        val sz = sin(transform.rotationZ)
+
+        val x3 = x * cz - y * sz
+        val y3 = x * sz + y * cz
+
+        x = x3
+        y = y3
+
+        return floatArrayOf(
+            x + px + transform.offsetX,
+            y + py + transform.offsetY,
+            z + pz + transform.offsetZ
+        )
+    }
+
+    // -------------------------------------------------
+    // MISE A JOUR DES BUFFERS GPU
+    // -------------------------------------------------
+
+    private fun updatePlayerGpuBuffers(
+        groups: LinkedHashMap<String, CpuPlayerBatch>
+    ) {
+
+        for (batch in playerBatches) {
+            batch.vertexCount = 0
+        }
+
+        for ((key, cpuBatch) in groups) {
+
+            val data = cpuBatch.vertices.toArray()
+
+            var gpuBatch = playerBatches.find {
+                it.key == key
+            }
+
+            if (gpuBatch == null) {
+
+                val bufferId = uploadDynamicGeometry(data, 0)
+
+                if (bufferId != 0) {
+                    gpuBatch = PlayerBatch(
+                        key = key,
+                        bufferId = bufferId,
+                        vertexCount = data.size / 3,
+                        color = cpuBatch.color
+                    )
+
+                    playerBatches.add(gpuBatch)
+                }
+
+            } else {
+
+                uploadDynamicGeometry(data, gpuBatch.bufferId)
+                gpuBatch.vertexCount = data.size / 3
+            }
+        }
+    }
+
+    private fun uploadDynamicGeometry(
+        vertices: FloatArray,
+        existingBuffer: Int
+    ): Int {
+
+        if (vertices.isEmpty()) return existingBuffer
+
+        var bufferId = existingBuffer
+
+        if (bufferId == 0) {
+            val ids = IntArray(1)
+            GLES20.glGenBuffers(1, ids, 0)
+            bufferId = ids[0]
+        }
+
+        if (bufferId == 0) return 0
+
+        val buffer = ByteBuffer
+            .allocateDirect(vertices.size * Float.SIZE_BYTES)
+            .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
+
+        buffer.put(vertices)
+        buffer.position(0)
+
+        GLES20.glBindBuffer(
+            GLES20.GL_ARRAY_BUFFER,
+            bufferId
+        )
+
+        GLES20.glBufferData(
+            GLES20.GL_ARRAY_BUFFER,
+            vertices.size * Float.SIZE_BYTES,
+            buffer,
+            GLES20.GL_DYNAMIC_DRAW
+        )
+
+        GLES20.glBindBuffer(
+            GLES20.GL_ARRAY_BUFFER,
+            0
+        )
+
+        return bufferId
     }
 
     // -------------------------------------------------
@@ -372,26 +639,17 @@ private class DK26Renderer : GLSurfaceView.Renderer {
             val left = -34f + i * 6.8f
             val right = left + 6.8f
 
-            val destination = if (i % 2 == 0) {
-                light
-            } else {
-                dark
-            }
+            val destination = if (i % 2 == 0) light else dark
 
             addRectangle(
                 destination,
-                left,
-                -52.5f,
-                right,
-                52.5f,
+                left, -52.5f,
+                right, 52.5f,
                 0.015f
             )
         }
 
-        return Pair(
-            light.toArray(),
-            dark.toArray()
-        )
+        return Pair(light.toArray(), dark.toArray())
     }
 
     private fun addRectangle(
@@ -402,7 +660,6 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         farZ: Float,
         y: Float
     ) {
-
         list.add(
             left, y, nearZ,
             right, y, nearZ,
@@ -431,7 +688,6 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         addLine(lines, -34f, y, 0f, 34f, y, 0f)
         addCircle(lines, 0f, y, 0f, 9.15f)
 
-        // Surfaces de réparation.
         addLine(lines, -20.16f, y, -52.5f, -20.16f, y, -36f)
         addLine(lines, 20.16f, y, -52.5f, 20.16f, y, -36f)
         addLine(lines, -20.16f, y, -36f, 20.16f, y, -36f)
@@ -440,7 +696,6 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         addLine(lines, 20.16f, y, 52.5f, 20.16f, y, 36f)
         addLine(lines, -20.16f, y, 36f, 20.16f, y, 36f)
 
-        // Surfaces de but.
         addLine(lines, -9.16f, y, -52.5f, -9.16f, y, -47f)
         addLine(lines, 9.16f, y, -52.5f, 9.16f, y, -47f)
         addLine(lines, -9.16f, y, -47f, 9.16f, y, -47f)
@@ -468,32 +723,18 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         val direction = if (z < 0f) -1f else 1f
         val backZ = z + direction * 2.5f
 
-        addLine(lines, -halfWidth, 0f, z,
-            -halfWidth, height, z)
+        addLine(lines, -halfWidth, 0f, z, -halfWidth, height, z)
+        addLine(lines, halfWidth, 0f, z, halfWidth, height, z)
+        addLine(lines, -halfWidth, height, z, halfWidth, height, z)
 
-        addLine(lines, halfWidth, 0f, z,
-            halfWidth, height, z)
+        addLine(lines, -halfWidth, 0f, z, -halfWidth, 0f, backZ)
+        addLine(lines, halfWidth, 0f, z, halfWidth, 0f, backZ)
 
-        addLine(lines, -halfWidth, height, z,
-            halfWidth, height, z)
+        addLine(lines, -halfWidth, height, z, -halfWidth, height, backZ)
+        addLine(lines, halfWidth, height, z, halfWidth, height, backZ)
 
-        addLine(lines, -halfWidth, 0f, z,
-            -halfWidth, 0f, backZ)
-
-        addLine(lines, halfWidth, 0f, z,
-            halfWidth, 0f, backZ)
-
-        addLine(lines, -halfWidth, height, z,
-            -halfWidth, height, backZ)
-
-        addLine(lines, halfWidth, height, z,
-            halfWidth, height, backZ)
-
-        addLine(lines, -halfWidth, height, backZ,
-            halfWidth, height, backZ)
-
-        addLine(lines, -halfWidth, 0f, backZ,
-            halfWidth, 0f, backZ)
+        addLine(lines, -halfWidth, height, backZ, halfWidth, height, backZ)
+        addLine(lines, -halfWidth, 0f, backZ, halfWidth, 0f, backZ)
     }
 
     private fun addLine(
@@ -501,10 +742,7 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         x1: Float, y1: Float, z1: Float,
         x2: Float, y2: Float, z2: Float
     ) {
-        list.add(
-            x1, y1, z1,
-            x2, y2, z2
-        )
+        list.add(x1, y1, z1, x2, y2, z2)
     }
 
     private fun addCircle(
@@ -536,35 +774,27 @@ private class DK26Renderer : GLSurfaceView.Renderer {
     }
 
     // -------------------------------------------------
-    // GPU
+    // GPU STATIQUE
     // -------------------------------------------------
 
-    private fun uploadStaticGeometry(
-        vertices: FloatArray
-    ): Int {
+    private fun uploadStaticGeometry(vertices: FloatArray): Int {
 
         if (vertices.isEmpty()) return 0
 
         val ids = IntArray(1)
-
         GLES20.glGenBuffers(1, ids, 0)
 
         if (ids[0] == 0) return 0
 
         val buffer = ByteBuffer
-            .allocateDirect(
-                vertices.size * Float.SIZE_BYTES
-            )
+            .allocateDirect(vertices.size * Float.SIZE_BYTES)
             .order(ByteOrder.nativeOrder())
             .asFloatBuffer()
 
         buffer.put(vertices)
         buffer.position(0)
 
-        GLES20.glBindBuffer(
-            GLES20.GL_ARRAY_BUFFER,
-            ids[0]
-        )
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, ids[0])
 
         GLES20.glBufferData(
             GLES20.GL_ARRAY_BUFFER,
@@ -573,13 +803,14 @@ private class DK26Renderer : GLSurfaceView.Renderer {
             GLES20.GL_STATIC_DRAW
         )
 
-        GLES20.glBindBuffer(
-            GLES20.GL_ARRAY_BUFFER,
-            0
-        )
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
 
         return ids[0]
     }
+
+    // -------------------------------------------------
+    // RENDU
+    // -------------------------------------------------
 
     private fun drawStaticBuffer(
         bufferId: Int,
@@ -590,14 +821,9 @@ private class DK26Renderer : GLSurfaceView.Renderer {
 
         if (bufferId == 0 || vertexCount == 0) return
 
-        GLES20.glBindBuffer(
-            GLES20.GL_ARRAY_BUFFER,
-            bufferId
-        )
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, bufferId)
 
-        GLES20.glEnableVertexAttribArray(
-            positionHandle
-        )
+        GLES20.glEnableVertexAttribArray(positionHandle)
 
         GLES20.glVertexAttribPointer(
             positionHandle,
@@ -616,22 +842,11 @@ private class DK26Renderer : GLSurfaceView.Renderer {
             0
         )
 
-        GLES20.glUniform4fv(
-            colorHandle,
-            1,
-            color,
-            0
-        )
+        GLES20.glUniform4fv(colorHandle, 1, color, 0)
 
-        GLES20.glDrawArrays(
-            mode,
-            0,
-            vertexCount
-        )
+        GLES20.glDrawArrays(mode, 0, vertexCount)
 
-        GLES20.glDisableVertexAttribArray(
-            positionHandle
-        )
+        GLES20.glDisableVertexAttribArray(positionHandle)
     }
 
     // -------------------------------------------------
@@ -643,15 +858,8 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         fragmentSource: String
     ): Int {
 
-        val vertex = compileShader(
-            GLES20.GL_VERTEX_SHADER,
-            vertexSource
-        )
-
-        val fragment = compileShader(
-            GLES20.GL_FRAGMENT_SHADER,
-            fragmentSource
-        )
+        val vertex = compileShader(GLES20.GL_VERTEX_SHADER, vertexSource)
+        val fragment = compileShader(GLES20.GL_FRAGMENT_SHADER, fragmentSource)
 
         if (vertex == 0 || fragment == 0) {
             if (vertex != 0) GLES20.glDeleteShader(vertex)
