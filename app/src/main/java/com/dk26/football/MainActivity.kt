@@ -2,12 +2,13 @@
 package com.dk26.football
 
 import android.app.Activity
-import android.opengl.GLSurfaceView
-import android.os.Bundle
 import android.content.pm.ActivityInfo
+import android.opengl.GLES20
+import android.opengl.GLSurfaceView
+import android.opengl.Matrix
+import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
-import android.opengl.GLES20
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -28,16 +29,14 @@ class MainActivity : Activity() {
 
         @Suppress("DEPRECATION")
         window.decorView.systemUiVisibility =
-            (View.SYSTEM_UI_FLAG_FULLSCREEN
-                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION)
+            View.SYSTEM_UI_FLAG_FULLSCREEN or
+            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE
 
         gameView = GLSurfaceView(this).apply {
             setEGLContextClientVersion(2)
-            setRenderer(FootballRenderer())
+            setRenderer(DK26Renderer())
             renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
         }
 
@@ -46,25 +45,31 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         super.onPause()
-        gameView.onPause()
+        if (::gameView.isInitialized) gameView.onPause()
     }
 
     override fun onResume() {
         super.onResume()
-        gameView.onResume()
+        if (::gameView.isInitialized) gameView.onResume()
     }
 }
 
-private class FootballRenderer : GLSurfaceView.Renderer {
+private class DK26Renderer : GLSurfaceView.Renderer {
 
     private var program = 0
     private var positionHandle = 0
+    private var matrixHandle = 0
     private var colorHandle = 0
 
+    private val projection = FloatArray(16)
+    private val view = FloatArray(16)
+    private val viewProjection = FloatArray(16)
+
     private val vertexShader = """
-        attribute vec2 aPosition;
+        attribute vec3 aPosition;
+        uniform mat4 uMVP;
         void main() {
-            gl_Position = vec4(aPosition, 0.0, 1.0);
+            gl_Position = uMVP * vec4(aPosition, 1.0);
         }
     """.trimIndent()
 
@@ -80,12 +85,17 @@ private class FootballRenderer : GLSurfaceView.Renderer {
         gl: GL10?,
         config: EGLConfig?
     ) {
-        GLES20.glClearColor(0.04f, 0.30f, 0.12f, 1f)
-        GLES20.glDisable(GLES20.GL_DEPTH_TEST)
+        GLES20.glClearColor(0.025f, 0.12f, 0.045f, 1f)
+        GLES20.glEnable(GLES20.GL_DEPTH_TEST)
+        GLES20.glDepthFunc(GLES20.GL_LEQUAL)
 
         program = createProgram(vertexShader, fragmentShader)
-        positionHandle = GLES20.glGetAttribLocation(program, "aPosition")
-        colorHandle = GLES20.glGetUniformLocation(program, "uColor")
+
+        if (program != 0) {
+            positionHandle = GLES20.glGetAttribLocation(program, "aPosition")
+            matrixHandle = GLES20.glGetUniformLocation(program, "uMVP")
+            colorHandle = GLES20.glGetUniformLocation(program, "uColor")
+        }
     }
 
     override fun onSurfaceChanged(
@@ -94,112 +104,248 @@ private class FootballRenderer : GLSurfaceView.Renderer {
         height: Int
     ) {
         GLES20.glViewport(0, 0, width, height)
+
+        val aspect = width.toFloat() / height.coerceAtLeast(1)
+
+        Matrix.perspectiveM(
+            projection,
+            0,
+            48f,
+            aspect,
+            1f,
+            250f
+        )
+
+        Matrix.setLookAtM(
+            view,
+            0,
+            0f, 66f, 112f,
+            0f, 0f, 0f,
+            0f, 1f, 0f
+        )
+
+        Matrix.multiplyMM(
+            viewProjection,
+            0,
+            projection,
+            0,
+            view,
+            0
+        )
     }
 
     override fun onDrawFrame(gl: GL10?) {
-        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+        GLES20.glClear(
+            GLES20.GL_COLOR_BUFFER_BIT or
+            GLES20.GL_DEPTH_BUFFER_BIT
+        )
 
         if (program == 0) return
 
         GLES20.glUseProgram(program)
 
+        drawPitch()
+        drawPitchMarkings()
+        drawGoals()
+    }
+
+    private fun drawPitch() {
+        // Dimensions du terrain : 105 m x 68 m.
         drawRectangle(
-            -0.92f, -0.82f, 0.92f, 0.82f,
-            floatArrayOf(0.04f, 0.38f, 0.13f, 1f)
+            -34f, -52.5f,
+            34f, 52.5f,
+            0f,
+            floatArrayOf(0.035f, 0.29f, 0.085f, 1f)
         )
 
-        val white = floatArrayOf(0.94f, 0.97f, 0.92f, 1f)
-
-        drawLine(-0.92f, -0.82f, 0.92f, -0.82f, white)
-        drawLine(0.92f, -0.82f, 0.92f, 0.82f, white)
-        drawLine(0.92f, 0.82f, -0.92f, 0.82f, white)
-        drawLine(-0.92f, 0.82f, -0.92f, -0.82f, white)
-
-        drawLine(0f, -0.82f, 0f, 0.82f, white)
-
-        drawCircle(0f, 0f, 0.19f, white)
-
-        drawRectangleOutline(
-            -0.92f, -0.42f, -0.62f, 0.42f, white
+        // Bandes de gazon créées par géométrie.
+        val stripeColors = arrayOf(
+            floatArrayOf(0.045f, 0.34f, 0.105f, 1f),
+            floatArrayOf(0.035f, 0.29f, 0.085f, 1f)
         )
 
-        drawRectangleOutline(
-            0.62f, -0.42f, 0.92f, 0.42f, white
-        )
+        for (i in 0 until 10) {
+            val left = -34f + i * 6.8f
+            val right = left + 6.8f
 
-        drawRectangleOutline(
-            -0.92f, -0.20f, -0.79f, 0.20f, white
-        )
+            drawRectangle(
+                left, -52.5f,
+                right, 52.5f,
+                0.015f,
+                stripeColors[i % 2]
+            )
+        }
+    }
 
-        drawRectangleOutline(
-            0.79f, -0.20f, 0.92f, 0.20f, white
-        )
+    private fun drawPitchMarkings() {
+        val lines = ArrayList<Float>()
 
-        drawCircle(-0.73f, 0f, 0.012f, white)
-        drawCircle(0.73f, 0f, 0.012f, white)
-        drawCircle(0f, 0f, 0.012f, white)
+        val y = 0.045f
+
+        // Contour extérieur.
+        addLine(lines, -34f, y, -52.5f, 34f, y, -52.5f)
+        addLine(lines, 34f, y, -52.5f, 34f, y, 52.5f)
+        addLine(lines, 34f, y, 52.5f, -34f, y, 52.5f)
+        addLine(lines, -34f, y, 52.5f, -34f, y, -52.5f)
+
+        // Ligne centrale.
+        addLine(lines, -34f, y, 0f, 34f, y, 0f)
+
+        // Cercle central.
+        addCircle(lines, 0f, y, 0f, 9.15f)
+
+        // Surface de réparation.
+        addLine(lines, -20.16f, y, -52.5f, -20.16f, y, -36f)
+        addLine(lines, 20.16f, y, -52.5f, 20.16f, y, -36f)
+        addLine(lines, -20.16f, y, -36f, 20.16f, y, -36f)
+
+        addLine(lines, -20.16f, y, 52.5f, -20.16f, y, 36f)
+        addLine(lines, 20.16f, y, 52.5f, 20.16f, y, 36f)
+        addLine(lines, -20.16f, y, 36f, 20.16f, y, 36f)
+
+        // Surface de but.
+        addLine(lines, -9.16f, y, -52.5f, -9.16f, y, -47f)
+        addLine(lines, 9.16f, y, -52.5f, 9.16f, y, -47f)
+        addLine(lines, -9.16f, y, -47f, 9.16f, y, -47f)
+
+        addLine(lines, -9.16f, y, 52.5f, -9.16f, y, 47f)
+        addLine(lines, 9.16f, y, 52.5f, 9.16f, y, 47f)
+        addLine(lines, -9.16f, y, 47f, 9.16f, y, 47f)
+
+        // Points de penalty.
+        addCircle(lines, 0f, y, -41.5f, 0.18f)
+        addCircle(lines, 0f, y, 41.5f, 0.18f)
+
+        drawLines(
+            lines.toFloatArray(),
+            floatArrayOf(0.96f, 0.97f, 0.92f, 1f)
+        )
+    }
+
+    private fun drawGoals() {
+        val goals = ArrayList<Float>()
+
+        val halfWidth = 3.66f
+        val goalHeight = 2.44f
+
+        // But côté nord.
+        addLine(goals, -halfWidth, 0f, -52.5f,
+            -halfWidth, goalHeight, -52.5f)
+        addLine(goals, halfWidth, 0f, -52.5f,
+            halfWidth, goalHeight, -52.5f)
+        addLine(goals, -halfWidth, goalHeight, -52.5f,
+            halfWidth, goalHeight, -52.5f)
+
+        // Profondeur du filet.
+        addLine(goals, -halfWidth, 0f, -52.5f,
+            -halfWidth, 0f, -55f)
+        addLine(goals, halfWidth, 0f, -52.5f,
+            halfWidth, 0f, -55f)
+        addLine(goals, -halfWidth, goalHeight, -52.5f,
+            -halfWidth, goalHeight, -55f)
+        addLine(goals, halfWidth, goalHeight, -52.5f,
+            halfWidth, goalHeight, -55f)
+        addLine(goals, -halfWidth, goalHeight, -55f,
+            halfWidth, goalHeight, -55f)
+        addLine(goals, -halfWidth, 0f, -55f,
+            halfWidth, 0f, -55f)
+
+        // But côté sud.
+        addLine(goals, -halfWidth, 0f, 52.5f,
+            -halfWidth, goalHeight, 52.5f)
+        addLine(goals, halfWidth, 0f, 52.5f,
+            halfWidth, goalHeight, 52.5f)
+        addLine(goals, -halfWidth, goalHeight, 52.5f,
+            halfWidth, goalHeight, 52.5f)
+
+        addLine(goals, -halfWidth, 0f, 52.5f,
+            -halfWidth, 0f, 55f)
+        addLine(goals, halfWidth, 0f, 52.5f,
+            halfWidth, 0f, 55f)
+        addLine(goals, -halfWidth, goalHeight, 52.5f,
+            -halfWidth, goalHeight, 55f)
+        addLine(goals, halfWidth, goalHeight, 52.5f,
+            halfWidth, goalHeight, 55f)
+        addLine(goals, -halfWidth, goalHeight, 55f,
+            halfWidth, goalHeight, 55f)
+        addLine(goals, -halfWidth, 0f, 55f,
+            halfWidth, 0f, 55f)
+
+        drawLines(
+            goals.toFloatArray(),
+            floatArrayOf(0.98f, 0.98f, 0.95f, 1f)
+        )
     }
 
     private fun drawRectangle(
         left: Float,
-        bottom: Float,
+        nearZ: Float,
         right: Float,
-        top: Float,
+        farZ: Float,
+        y: Float,
         color: FloatArray
     ) {
         val vertices = floatArrayOf(
-            left, bottom,
-            right, bottom,
-            left, top,
-            right, top
-        )
-        draw(vertices, GLES20.GL_TRIANGLE_STRIP, color)
-    }
+            left, y, nearZ,
+            right, y, nearZ,
+            left, y, farZ,
 
-    private fun drawRectangleOutline(
-        left: Float,
-        bottom: Float,
-        right: Float,
-        top: Float,
-        color: FloatArray
-    ) {
-        val vertices = floatArrayOf(
-            left, bottom,
-            right, bottom,
-            right, top,
-            left, top,
-            left, bottom
+            right, y, nearZ,
+            right, y, farZ,
+            left, y, farZ
         )
-        draw(vertices, GLES20.GL_LINE_STRIP, color)
-    }
 
-    private fun drawLine(
-        x1: Float,
-        y1: Float,
-        x2: Float,
-        y2: Float,
-        color: FloatArray
-    ) {
         draw(
-            floatArrayOf(x1, y1, x2, y2),
-            GLES20.GL_LINES,
+            vertices,
+            GLES20.GL_TRIANGLES,
             color
         )
     }
 
-    private fun drawCircle(
+    private fun addLine(
+        list: MutableList<Float>,
+        x1: Float, y1: Float, z1: Float,
+        x2: Float, y2: Float, z2: Float
+    ) {
+        list.add(x1)
+        list.add(y1)
+        list.add(z1)
+
+        list.add(x2)
+        list.add(y2)
+        list.add(z2)
+    }
+
+    private fun addCircle(
+        list: MutableList<Float>,
         cx: Float,
-        cy: Float,
-        radius: Float,
+        y: Float,
+        cz: Float,
+        radius: Float
+    ) {
+        val segments = 96
+
+        for (i in 0 until segments) {
+            val a1 = 2.0 * Math.PI * i / segments
+            val a2 = 2.0 * Math.PI * (i + 1) / segments
+
+            addLine(
+                list,
+                cx + radius * cos(a1).toFloat(),
+                y,
+                cz + radius * sin(a1).toFloat(),
+                cx + radius * cos(a2).toFloat(),
+                y,
+                cz + radius * sin(a2).toFloat()
+            )
+        }
+    }
+
+    private fun drawLines(
+        vertices: FloatArray,
         color: FloatArray
     ) {
-        val vertices = ArrayList<Float>()
-        for (i in 0..80) {
-            val angle = 2.0 * Math.PI * i / 80.0
-            vertices.add(cx + radius * cos(angle).toFloat())
-            vertices.add(cy + radius * sin(angle).toFloat())
-        }
-        draw(vertices.toFloatArray(), GLES20.GL_LINE_STRIP, color)
+        draw(vertices, GLES20.GL_LINES, color)
     }
 
     private fun draw(
@@ -207,6 +353,8 @@ private class FootballRenderer : GLSurfaceView.Renderer {
         mode: Int,
         color: FloatArray
     ) {
+        if (vertices.isEmpty()) return
+
         val buffer: FloatBuffer = ByteBuffer
             .allocateDirect(vertices.size * 4)
             .order(ByteOrder.nativeOrder())
@@ -216,18 +364,39 @@ private class FootballRenderer : GLSurfaceView.Renderer {
         buffer.position(0)
 
         GLES20.glEnableVertexAttribArray(positionHandle)
+
         GLES20.glVertexAttribPointer(
             positionHandle,
-            2,
+            3,
             GLES20.GL_FLOAT,
             false,
             0,
             buffer
         )
 
-        GLES20.glUniform4fv(colorHandle, 1, color, 0)
-        GLES20.glLineWidth(2f)
-        GLES20.glDrawArrays(mode, 0, vertices.size / 2)
+        GLES20.glUniformMatrix4fv(
+            matrixHandle,
+            1,
+            false,
+            viewProjection,
+            0
+        )
+
+        GLES20.glUniform4fv(
+            colorHandle,
+            1,
+            color,
+            0
+        )
+
+        GLES20.glLineWidth(2.2f)
+
+        GLES20.glDrawArrays(
+            mode,
+            0,
+            vertices.size / 3
+        )
+
         GLES20.glDisableVertexAttribArray(positionHandle)
     }
 
@@ -239,6 +408,7 @@ private class FootballRenderer : GLSurfaceView.Renderer {
             GLES20.GL_VERTEX_SHADER,
             vertexSource
         )
+
         val fragment = compileShader(
             GLES20.GL_FRAGMENT_SHADER,
             fragmentSource
@@ -247,11 +417,13 @@ private class FootballRenderer : GLSurfaceView.Renderer {
         if (vertex == 0 || fragment == 0) return 0
 
         val result = GLES20.glCreateProgram()
+
         GLES20.glAttachShader(result, vertex)
         GLES20.glAttachShader(result, fragment)
         GLES20.glLinkProgram(result)
 
         val status = IntArray(1)
+
         GLES20.glGetProgramiv(
             result,
             GLES20.GL_LINK_STATUS,
@@ -259,13 +431,13 @@ private class FootballRenderer : GLSurfaceView.Renderer {
             0
         )
 
+        GLES20.glDeleteShader(vertex)
+        GLES20.glDeleteShader(fragment)
+
         if (status[0] == 0) {
             GLES20.glDeleteProgram(result)
             return 0
         }
-
-        GLES20.glDeleteShader(vertex)
-        GLES20.glDeleteShader(fragment)
 
         return result
     }
@@ -275,10 +447,12 @@ private class FootballRenderer : GLSurfaceView.Renderer {
         source: String
     ): Int {
         val shader = GLES20.glCreateShader(type)
+
         GLES20.glShaderSource(shader, source)
         GLES20.glCompileShader(shader)
 
         val status = IntArray(1)
+
         GLES20.glGetShaderiv(
             shader,
             GLES20.GL_COMPILE_STATUS,
