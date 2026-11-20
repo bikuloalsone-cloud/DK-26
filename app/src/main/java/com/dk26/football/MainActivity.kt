@@ -78,7 +78,8 @@ private class DK26Renderer : GLSurfaceView.Renderer {
 
     private data class AnimatedPlayer(
         val matchPlayer: MatchPlayer,
-        val parts: List<PlayerGeometryPart>
+        val parts: List<PlayerGeometryPart>,
+        val bindPositions: Map<PlayerBone, BonePosition>
     )
 
     private data class CpuPlayerBatch(
@@ -291,10 +292,15 @@ private class DK26Renderer : GLSurfaceView.Renderer {
                     movementSpeed = 0.85f
                 )
 
+                val bindPositions = buildBindPositions(
+                    model.skeleton.bones
+                )
+
                 animatedPlayers.add(
                     AnimatedPlayer(
                         matchPlayer = matchPlayer,
-                        parts = model.geometry.parts
+                        parts = model.geometry.parts,
+                        bindPositions = bindPositions
                     )
                 )
 
@@ -304,7 +310,52 @@ private class DK26Renderer : GLSurfaceView.Renderer {
     }
 
     // -------------------------------------------------
-    // ANIMATION ET TRANSFORMATIONS SQUELETTIQUES
+    // CALCUL DES POSITIONS DE REPOS DES OS
+    // -------------------------------------------------
+
+    private fun buildBindPositions(
+        definitions: List<BoneDefinition>
+    ): Map<PlayerBone, BonePosition> {
+
+        val positions = HashMap<PlayerBone, BonePosition>(
+            definitions.size
+        )
+
+        // Les définitions du squelette sont ordonnées
+        // du parent vers les enfants.
+        for (definition in definitions) {
+
+            val local = definition.bindPosition
+            val parent = definition.parent
+
+            val worldPosition = if (parent == null) {
+
+                BonePosition(
+                    local.x,
+                    local.y,
+                    local.z
+                )
+
+            } else {
+
+                val parentPosition = positions[parent]
+                    ?: continue
+
+                BonePosition(
+                    parentPosition.x + local.x,
+                    parentPosition.y + local.y,
+                    parentPosition.z + local.z
+                )
+            }
+
+            positions[definition.bone] = worldPosition
+        }
+
+        return positions
+    }
+
+    // -------------------------------------------------
+    // ANIMATION DES 22 JOUEURS
     // -------------------------------------------------
 
     private fun updateAnimatedPlayers(deltaSeconds: Float) {
@@ -335,7 +386,7 @@ private class DK26Renderer : GLSurfaceView.Renderer {
 
                 val boneTransform = getPartBoneTransform(
                     part.name,
-                    model.skeleton.bones,
+                    animatedPlayer.bindPositions,
                     animatedBones
                 )
 
@@ -350,7 +401,6 @@ private class DK26Renderer : GLSurfaceView.Renderer {
                     )
                 }
 
-                // Un tableau temporaire par partie, et non par sommet.
                 val transformed = FloatArray(3)
 
                 var index = 0
@@ -375,25 +425,21 @@ private class DK26Renderer : GLSurfaceView.Renderer {
                         transformed[2] = originalZ
                     }
 
-                    val x = transformed[0]
-                    val y = transformed[1]
-                    val z = transformed[2]
-
                     val worldX = if (redTeam) {
-                        matchPlayer.x - x
+                        matchPlayer.x - transformed[0]
                     } else {
-                        matchPlayer.x + x
+                        matchPlayer.x + transformed[0]
                     }
 
                     val worldZ = if (redTeam) {
-                        matchPlayer.z - z
+                        matchPlayer.z - transformed[2]
                     } else {
-                        matchPlayer.z + z
+                        matchPlayer.z + transformed[2]
                     }
 
                     batch.vertices.add(
                         worldX,
-                        y + 0.025f,
+                        transformed[1] + 0.025f,
                         worldZ
                     )
 
@@ -406,12 +452,12 @@ private class DK26Renderer : GLSurfaceView.Renderer {
     }
 
     // -------------------------------------------------
-    // ASSOCIATION DES PARTIES AUX OS
+    // ASSOCIATION DES PARTIES DU CORPS AUX ARTICULATIONS
     // -------------------------------------------------
 
     private fun getPartBoneTransform(
         partName: String,
-        definitions: List<BoneDefinition>,
+        bindPositions: Map<PlayerBone, BonePosition>,
         animatedBones: List<AnimatedBone>
     ): BonePartTransform? {
 
@@ -419,40 +465,63 @@ private class DK26Renderer : GLSurfaceView.Renderer {
 
         val bone = when {
 
-            name.contains("leftboot") ->
-                PlayerBone.LEFT_FOOT
-
-            name.contains("rightboot") ->
-                PlayerBone.RIGHT_FOOT
-
-            name.contains("leftsock") ->
-                PlayerBone.LEFT_CALF
-
-            name.contains("rightsock") ->
-                PlayerBone.RIGHT_CALF
-
-            name.contains("leftleg") ||
-                name.contains("leftthigh") ->
-                PlayerBone.LEFT_THIGH
-
-            name.contains("rightleg") ||
-                name.contains("rightthigh") ->
-                PlayerBone.RIGHT_THIGH
-
-            name.contains("leftarm") ||
-                name.contains("leftsleeve") ->
-                PlayerBone.LEFT_SHOULDER
-
-            name.contains("rightarm") ||
-                name.contains("rightsleeve") ->
-                PlayerBone.RIGHT_SHOULDER
+            // BRAS GAUCHE
+            name.contains("leftforearm") ->
+                PlayerBone.LEFT_FOREARM
 
             name.contains("lefthand") ->
                 PlayerBone.LEFT_HAND
 
+            name.contains("leftupperarm") ||
+                name.contains("leftsleeve") ->
+                PlayerBone.LEFT_UPPER_ARM
+
+            name.contains("leftshoulder") ||
+                name.contains("leftarm") ->
+                PlayerBone.LEFT_SHOULDER
+
+            // BRAS DROIT
+            name.contains("rightforearm") ->
+                PlayerBone.RIGHT_FOREARM
+
             name.contains("righthand") ->
                 PlayerBone.RIGHT_HAND
 
+            name.contains("rightupperarm") ||
+                name.contains("rightsleeve") ->
+                PlayerBone.RIGHT_UPPER_ARM
+
+            name.contains("rightshoulder") ||
+                name.contains("rightarm") ->
+                PlayerBone.RIGHT_SHOULDER
+
+            // JAMBE GAUCHE
+            name.contains("leftfoot") ||
+                name.contains("leftboot") ->
+                PlayerBone.LEFT_FOOT
+
+            name.contains("leftcalf") ||
+                name.contains("leftsock") ->
+                PlayerBone.LEFT_CALF
+
+            name.contains("leftthigh") ||
+                name.contains("leftleg") ->
+                PlayerBone.LEFT_THIGH
+
+            // JAMBE DROITE
+            name.contains("rightfoot") ||
+                name.contains("rightboot") ->
+                PlayerBone.RIGHT_FOOT
+
+            name.contains("rightcalf") ||
+                name.contains("rightsock") ->
+                PlayerBone.RIGHT_CALF
+
+            name.contains("rightthigh") ||
+                name.contains("rightleg") ->
+                PlayerBone.RIGHT_THIGH
+
+            // TETE ET VISAGE
             name.contains("neck") ->
                 PlayerBone.NECK
 
@@ -472,27 +541,29 @@ private class DK26Renderer : GLSurfaceView.Renderer {
                 name.contains("chin") ->
                 PlayerBone.HEAD
 
+            // TRONC ET BASSIN
             name.contains("torso") ||
+                name.contains("chest") ||
                 name.contains("jersey") ->
                 PlayerBone.CHEST
 
-            name.contains("shorts") ->
+            name.contains("shorts") ||
+                name.contains("pelvis") ->
                 PlayerBone.PELVIS
 
             else -> null
         } ?: return null
 
-        val definition = definitions.firstOrNull {
-            it.bone == bone
-        } ?: return null
+        val bindPosition = bindPositions[bone]
+            ?: return null
 
-        val animated = animatedBones.firstOrNull {
+        val animatedBone = animatedBones.firstOrNull {
             it.bone == bone
         } ?: return null
 
         return BonePartTransform(
-            bindPosition = definition.bindPosition,
-            animatedBone = animated
+            bindPosition = bindPosition,
+            animatedBone = animatedBone
         )
     }
 
@@ -511,7 +582,8 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         val bind = transform.bindPosition
         val animated = transform.animatedBone
 
-        // Position du sommet par rapport à son articulation.
+        // Coordonnées locales du sommet par rapport
+        // à la position globale de repos de son articulation.
         val localX = x - bind.x
         val localY = y - bind.y
         val localZ = z - bind.z
@@ -527,21 +599,21 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         val cz = cos(rotation.z)
         val sz = sin(rotation.z)
 
-        // Rotation X.
+        // Rotation autour de X.
         val x1 = localX
         val y1 = localY * cx - localZ * sx
         val z1 = localY * sx + localZ * cx
 
-        // Rotation Y.
+        // Rotation autour de Y.
         val x2 = x1 * cy + z1 * sy
         val y2 = y1
         val z2 = -x1 * sy + z1 * cy
 
-        // Rotation Z.
+        // Rotation autour de Z.
         val x3 = x2 * cz - y2 * sz
         val y3 = x2 * sz + y2 * cz
 
-        // Position finale dans l'espace du joueur.
+        // Retour dans l'espace local du joueur.
         output[0] = animated.position.x + x3
         output[1] = animated.position.y + y3
         output[2] = animated.position.z + z2
