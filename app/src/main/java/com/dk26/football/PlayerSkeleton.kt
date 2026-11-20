@@ -1,7 +1,9 @@
 
 package com.dk26.football
 
+import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.max
 import kotlin.math.sin
 
 enum class PlayerBone {
@@ -70,50 +72,130 @@ class PlayerSkeleton private constructor(
         val calculated = HashMap<PlayerBone, BoneTransform>(bones.size)
         val result = ArrayList<AnimatedBone>(bones.size)
 
+        val leftElbowFlex = max(
+            0f,
+            abs(pose.leftArm.rotationX) - 0.15f
+        ) * 0.22f
+
+        val rightElbowFlex = max(
+            0f,
+            abs(pose.rightArm.rotationX) - 0.15f
+        ) * 0.22f
+
+        val leftKneeFlex = max(
+            0f,
+            abs(pose.leftLeg.rotationX) - 0.18f
+        ) * 0.30f
+
+        val rightKneeFlex = max(
+            0f,
+            abs(pose.rightLeg.rotationX) - 0.18f
+        ) * 0.30f
+
+        val localRotations = mapOf(
+            PlayerBone.SPINE to BoneRotation(
+                pose.torso.rotationX,
+                pose.torso.rotationY,
+                pose.torso.rotationZ
+            ),
+
+            PlayerBone.HEAD to BoneRotation(
+                pose.head.rotationX,
+                pose.head.rotationY,
+                pose.head.rotationZ
+            ),
+
+            PlayerBone.LEFT_SHOULDER to BoneRotation(
+                pose.leftArm.rotationX * 0.25f,
+                pose.leftArm.rotationY * 0.25f,
+                pose.leftArm.rotationZ * 0.25f
+            ),
+
+            PlayerBone.LEFT_UPPER_ARM to BoneRotation(
+                pose.leftArm.rotationX * 0.50f,
+                pose.leftArm.rotationY * 0.50f,
+                pose.leftArm.rotationZ * 0.50f
+            ),
+
+            PlayerBone.LEFT_FOREARM to BoneRotation(
+                pose.leftArm.rotationX * 0.25f + leftElbowFlex,
+                pose.leftArm.rotationY * 0.25f,
+                pose.leftArm.rotationZ * 0.25f
+            ),
+
+            PlayerBone.LEFT_HAND to BoneRotation(
+                -leftElbowFlex * 0.15f,
+                0f,
+                0f
+            ),
+
+            PlayerBone.RIGHT_SHOULDER to BoneRotation(
+                pose.rightArm.rotationX * 0.25f,
+                pose.rightArm.rotationY * 0.25f,
+                pose.rightArm.rotationZ * 0.25f
+            ),
+
+            PlayerBone.RIGHT_UPPER_ARM to BoneRotation(
+                pose.rightArm.rotationX * 0.50f,
+                pose.rightArm.rotationY * 0.50f,
+                pose.rightArm.rotationZ * 0.50f
+            ),
+
+            PlayerBone.RIGHT_FOREARM to BoneRotation(
+                pose.rightArm.rotationX * 0.25f + rightElbowFlex,
+                pose.rightArm.rotationY * 0.25f,
+                pose.rightArm.rotationZ * 0.25f
+            ),
+
+            PlayerBone.RIGHT_HAND to BoneRotation(
+                -rightElbowFlex * 0.15f,
+                0f,
+                0f
+            ),
+
+            PlayerBone.LEFT_THIGH to BoneRotation(
+                pose.leftLeg.rotationX * 0.65f,
+                pose.leftLeg.rotationY * 0.65f,
+                pose.leftLeg.rotationZ * 0.65f
+            ),
+
+            PlayerBone.LEFT_CALF to BoneRotation(
+                pose.leftLeg.rotationX * 0.25f + leftKneeFlex,
+                pose.leftLeg.rotationY * 0.25f,
+                pose.leftLeg.rotationZ * 0.25f
+            ),
+
+            PlayerBone.LEFT_FOOT to BoneRotation(
+                pose.leftLeg.rotationX * 0.10f - leftKneeFlex * 0.20f,
+                0f,
+                0f
+            ),
+
+            PlayerBone.RIGHT_THIGH to BoneRotation(
+                pose.rightLeg.rotationX * 0.65f,
+                pose.rightLeg.rotationY * 0.65f,
+                pose.rightLeg.rotationZ * 0.65f
+            ),
+
+            PlayerBone.RIGHT_CALF to BoneRotation(
+                pose.rightLeg.rotationX * 0.25f + rightKneeFlex,
+                pose.rightLeg.rotationY * 0.25f,
+                pose.rightLeg.rotationZ * 0.25f
+            ),
+
+            PlayerBone.RIGHT_FOOT to BoneRotation(
+                pose.rightLeg.rotationX * 0.10f - rightKneeFlex * 0.20f,
+                0f,
+                0f
+            )
+        )
+
         for (definition in bones) {
 
             val bone = definition.bone
             val parent = definition.parent
 
-            val localRotation = when (bone) {
-                PlayerBone.SPINE -> BoneRotation(
-                    pose.torso.rotationX,
-                    pose.torso.rotationY,
-                    pose.torso.rotationZ
-                )
-
-                PlayerBone.HEAD -> BoneRotation(
-                    pose.head.rotationX,
-                    pose.head.rotationY,
-                    pose.head.rotationZ
-                )
-
-                PlayerBone.LEFT_SHOULDER -> BoneRotation(
-                    pose.leftArm.rotationX,
-                    pose.leftArm.rotationY,
-                    pose.leftArm.rotationZ
-                )
-
-                PlayerBone.RIGHT_SHOULDER -> BoneRotation(
-                    pose.rightArm.rotationX,
-                    pose.rightArm.rotationY,
-                    pose.rightArm.rotationZ
-                )
-
-                PlayerBone.LEFT_THIGH -> BoneRotation(
-                    pose.leftLeg.rotationX,
-                    pose.leftLeg.rotationY,
-                    pose.leftLeg.rotationZ
-                )
-
-                PlayerBone.RIGHT_THIGH -> BoneRotation(
-                    pose.rightLeg.rotationX,
-                    pose.rightLeg.rotationY,
-                    pose.rightLeg.rotationZ
-                )
-
-                else -> BoneRotation()
-            }
+            val localRotation = localRotations[bone] ?: BoneRotation()
 
             val localOffset = when (bone) {
                 PlayerBone.ROOT -> BonePosition(
@@ -174,6 +256,7 @@ class PlayerSkeleton private constructor(
                 worldPosition = localPosition
                 worldRotation = localRotation
             } else {
+
                 val rotated = rotatePosition(
                     localPosition,
                     parentTransform.rotation
@@ -226,17 +309,14 @@ class PlayerSkeleton private constructor(
         val cz = cos(rotation.z)
         val sz = sin(rotation.z)
 
-        // Rotation autour de X
         val x1 = position.x
         val y1 = position.y * cx - position.z * sx
         val z1 = position.y * sx + position.z * cx
 
-        // Rotation autour de Y
         val x2 = x1 * cy + z1 * sy
         val y2 = y1
         val z2 = -x1 * sy + z1 * cy
 
-        // Rotation autour de Z
         val x3 = x2 * cz - y2 * sz
         val y3 = x2 * sz + y2 * cz
 
