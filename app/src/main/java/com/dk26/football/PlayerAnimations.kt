@@ -38,6 +38,7 @@ data class PlayerPose(
 class PlayerAnimationController {
 
     private var phase = 0f
+    private var actionTime = 0f
     private var currentAction = PlayerAction.IDLE
 
     private val twoPi = (2.0 * PI).toFloat()
@@ -45,6 +46,7 @@ class PlayerAnimationController {
     fun setAction(action: PlayerAction) {
         if (action != currentAction) {
             currentAction = action
+            actionTime = 0f
 
             if (
                 action == PlayerAction.JUMP ||
@@ -65,16 +67,18 @@ class PlayerAnimationController {
         val speed = movementSpeed.coerceIn(0f, 1.5f)
         val turnDirection = direction.coerceIn(-1f, 1f)
 
+        actionTime += delta
+
         val frequency = when (currentAction) {
-            PlayerAction.IDLE -> 1.4f
-            PlayerAction.WALK -> 5.0f
-            PlayerAction.RUN -> 8.0f
-            PlayerAction.SPRINT -> 11.0f
-            PlayerAction.JUMP -> 4.0f
-            PlayerAction.TURN -> 6.0f
-            PlayerAction.DRIBBLE -> 9.0f
-            PlayerAction.SHOOT -> 5.0f
-            PlayerAction.DEFEND -> 4.0f
+            PlayerAction.IDLE -> 1.2f
+            PlayerAction.WALK -> 5.2f
+            PlayerAction.RUN -> 8.2f
+            PlayerAction.SPRINT -> 10.8f
+            PlayerAction.JUMP -> 4f
+            PlayerAction.TURN -> 6f
+            PlayerAction.DRIBBLE -> 8.8f
+            PlayerAction.SHOOT -> 5f
+            PlayerAction.DEFEND -> 3.8f
         }
 
         val activity = when (currentAction) {
@@ -93,84 +97,85 @@ class PlayerAnimationController {
         val oppositeWave = -wave
         val doubleWave = sin((phase * 2f).toDouble()).toFloat()
 
-        val leftLeg: Float
-        val rightLeg: Float
-        val leftArm: Float
-        val rightArm: Float
-        val torsoLean: Float
-        val torsoTurn: Float
-        val jumpHeight: Float
-        val defensiveLean: Float
+        var leftLeg = 0f
+        var rightLeg = 0f
+        var leftArm = 0f
+        var rightArm = 0f
+        var torsoLean = 0f
+        var torsoTurn = 0f
+        var jumpHeight = 0f
+        var defensiveLean = 0f
 
         when (currentAction) {
 
             PlayerAction.IDLE -> {
-                leftLeg = wave * 0.015f
-                rightLeg = oppositeWave * 0.015f
-                leftArm = wave * 0.025f
-                rightArm = oppositeWave * 0.025f
-                torsoLean = doubleWave * 0.008f
-                torsoTurn = 0f
-                jumpHeight = 0f
-                defensiveLean = 0f
+                leftLeg = wave * 0.008f
+                rightLeg = oppositeWave * 0.008f
+                leftArm = wave * 0.018f
+                rightArm = oppositeWave * 0.018f
+                torsoLean = doubleWave * 0.006f
             }
 
             PlayerAction.WALK -> {
-                leftLeg = wave * 0.35f
-                rightLeg = oppositeWave * 0.35f
-                leftArm = oppositeWave * 0.22f
-                rightArm = wave * 0.22f
-                torsoLean = 0.025f
+                leftLeg = wave * 0.38f
+                rightLeg = oppositeWave * 0.38f
+                leftArm = oppositeWave * 0.24f
+                rightArm = wave * 0.24f
+                torsoLean = 0.035f
                 torsoTurn = wave * 0.025f
                 jumpHeight = abs(wave) * 0.012f
-                defensiveLean = 0f
             }
 
             PlayerAction.RUN -> {
-                leftLeg = wave * 0.62f
-                rightLeg = oppositeWave * 0.62f
-                leftArm = oppositeWave * 0.42f
-                rightArm = wave * 0.42f
-                torsoLean = 0.12f
+                leftLeg = wave * 0.65f
+                rightLeg = oppositeWave * 0.65f
+                leftArm = oppositeWave * 0.43f
+                rightArm = wave * 0.43f
+                torsoLean = 0.13f
                 torsoTurn = wave * 0.045f
                 jumpHeight = abs(wave) * 0.025f
-                defensiveLean = 0f
             }
 
             PlayerAction.SPRINT -> {
-                leftLeg = wave * 0.88f
-                rightLeg = oppositeWave * 0.88f
-                leftArm = oppositeWave * 0.62f
-                rightArm = wave * 0.62f
+                leftLeg = wave * 0.90f
+                rightLeg = oppositeWave * 0.90f
+                leftArm = oppositeWave * 0.65f
+                rightArm = wave * 0.65f
                 torsoLean = 0.22f
                 torsoTurn = wave * 0.065f
                 jumpHeight = abs(wave) * 0.04f
-                defensiveLean = 0f
             }
 
             PlayerAction.JUMP -> {
-                val jumpWave = sin(phase.toDouble()).toFloat()
-                val height = (jumpWave + 1f) * 0.5f
+                // Saut ponctuel : impulsion, montée et retombée.
+                val duration = 0.9f
+                val progress = (actionTime / duration).coerceIn(0f, 1f)
 
-                leftLeg = -0.18f - height * 0.32f
-                rightLeg = -0.18f - height * 0.32f
-                leftArm = -0.55f - height * 0.25f
-                rightArm = -0.55f - height * 0.25f
-                torsoLean = -0.08f
-                torsoTurn = 0f
-                jumpHeight = height * 0.42f
-                defensiveLean = 0f
+                val jumpCurve = if (progress < 1f) {
+                    sin(progress * PI).toFloat()
+                } else {
+                    0f
+                }
+
+                val preparation = (1f - progress).coerceIn(0f, 1f)
+
+                leftLeg = -0.15f - jumpCurve * 0.28f
+                rightLeg = -0.15f - jumpCurve * 0.28f
+
+                leftArm = -0.45f - jumpCurve * 0.30f
+                rightArm = -0.45f - jumpCurve * 0.30f
+
+                torsoLean = -0.06f - preparation * 0.04f
+                jumpHeight = jumpCurve * 0.42f
             }
 
             PlayerAction.TURN -> {
                 leftLeg = wave * 0.30f
                 rightLeg = oppositeWave * 0.30f
-                leftArm = oppositeWave * 0.28f
-                rightArm = wave * 0.28f
-                torsoLean = 0.035f
+                leftArm = oppositeWave * 0.27f
+                rightArm = wave * 0.27f
+                torsoLean = 0.04f
                 torsoTurn = turnDirection * 0.45f
-                jumpHeight = 0f
-                defensiveLean = 0f
             }
 
             PlayerAction.DRIBBLE -> {
@@ -178,36 +183,55 @@ class PlayerAnimationController {
                 rightLeg = oppositeWave * 0.58f
                 leftArm = oppositeWave * 0.32f
                 rightArm = wave * 0.32f
-                torsoLean = 0.10f
-                torsoTurn = turnDirection * 0.12f +
-                    doubleWave * 0.035f
+                torsoLean = 0.11f
+
+                torsoTurn = turnDirection * 0.14f +
+                    doubleWave * 0.04f
+
                 jumpHeight = abs(wave) * 0.018f
-                defensiveLean = 0f
             }
 
             PlayerAction.SHOOT -> {
-                val strike = sin(phase.toDouble()).toFloat()
-                val preparation = (1f - strike) * 0.5f
-                val followThrough = maxOf(0f, strike)
+                // Une seule séquence : préparation, frappe, finition.
+                val duration = 0.85f
+                val progress = (actionTime / duration).coerceIn(0f, 1f)
+
+                val preparation = when {
+                    progress < 0.35f ->
+                        progress / 0.35f
+
+                    else -> 1f
+                }
+
+                val strike = when {
+                    progress < 0.35f -> 0f
+                    progress < 0.58f ->
+                        (progress - 0.35f) / 0.23f
+                    progress < 1f ->
+                        1f - (progress - 0.58f) / 0.42f
+                    else -> 0f
+                }.coerceIn(0f, 1f)
 
                 leftLeg = 0.12f + preparation * 0.18f
-                rightLeg = -strike * 1.05f
-                leftArm = -0.25f - followThrough * 0.30f
-                rightArm = 0.25f + followThrough * 0.35f
-                torsoLean = -0.12f - followThrough * 0.12f
+                rightLeg = -strike * 1.15f
+
+                leftArm = -0.25f - strike * 0.30f
+                rightArm = 0.25f + strike * 0.35f
+
+                torsoLean = -0.10f - strike * 0.12f
                 torsoTurn = turnDirection * 0.16f
-                jumpHeight = followThrough * 0.025f
-                defensiveLean = 0f
+                jumpHeight = strike * 0.025f
             }
 
             PlayerAction.DEFEND -> {
                 leftLeg = wave * 0.13f
                 rightLeg = oppositeWave * 0.13f
+
                 leftArm = -0.12f + wave * 0.08f
                 rightArm = -0.12f - wave * 0.08f
+
                 torsoLean = 0.16f
                 torsoTurn = turnDirection * 0.12f
-                jumpHeight = 0f
                 defensiveLean = 0.30f
             }
         }
@@ -229,7 +253,7 @@ class PlayerAnimationController {
             torso = JointTransform(
                 rotationX = torsoLean,
                 rotationY = torsoTurn,
-                rotationZ = doubleWave * 0.025f,
+                rotationZ = doubleWave * 0.02f,
                 offsetY = jumpHeight + breathing
             ),
 
@@ -267,6 +291,7 @@ class PlayerAnimationController {
 
     fun reset() {
         phase = 0f
+        actionTime = 0f
         currentAction = PlayerAction.IDLE
     }
 
