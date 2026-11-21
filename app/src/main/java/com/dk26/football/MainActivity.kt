@@ -7,9 +7,11 @@ import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.opengl.Matrix
 import android.os.Bundle
-import android.view.View
+import android.view.Gravity
 import android.view.MotionEvent
+import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.Locale
@@ -17,11 +19,13 @@ import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 class MainActivity : Activity() {
 
     private lateinit var gameView: GLSurfaceView
     private lateinit var renderer: DK26Renderer
+
     private var touchStartX = 0f
     private var touchStartY = 0f
 
@@ -38,44 +42,86 @@ class MainActivity : Activity() {
                 View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
                 View.SYSTEM_UI_FLAG_LAYOUT_STABLE
 
+        renderer = DK26Renderer()
+
         gameView = GLSurfaceView(this).apply {
             setEGLContextClientVersion(2)
-            renderer = DK26Renderer()
             setRenderer(renderer)
             renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
         }
 
-        setContentView(gameView)
-    }
+        val root = FrameLayout(this)
 
-    /**
-     * Un glissement sur l'écran déclenche un tir.
-     * La direction horizontale règle l'angle ; la longueur du geste règle la puissance.
-     */
-    override fun onTouchEvent(event: MotionEvent): Boolean {
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                touchStartX = event.x
-                touchStartY = event.y
-                return true
-            }
+        root.addView(
+            gameView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
 
-            MotionEvent.ACTION_UP -> {
-                val dx = (event.x - touchStartX) / gameView.width.coerceAtLeast(1)
-                val dy = (event.y - touchStartY) / gameView.height.coerceAtLeast(1)
-                val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+        // Joystick virtuel
+        val joystick = VirtualJoystickView(this)
 
-                if (distance > 0.025f) {
-                    val horizontalAim = (dx * 2.4f).coerceIn(-0.85f, 0.85f)
-                    val power = (0.30f + distance * 1.8f).coerceIn(0.30f, 1f)
-                    gameView.queueEvent {
-                        renderer.shootBall(horizontalAim, power)
-                    }
-                }
-                return true
+        joystick.onMove = { horizontal, vertical ->
+            gameView.queueEvent {
+                renderer.setMovementInput(horizontal, vertical)
             }
         }
-        return true
+
+        val joystickSize =
+            (326f * resources.displayMetrics.density).toInt()
+
+        root.addView(
+            joystick,
+            FrameLayout.LayoutParams(
+                joystickSize,
+                joystickSize,
+                Gravity.BOTTOM or Gravity.START
+            )
+        )
+
+        // Glissement sur le terrain pour tirer
+        gameView.setOnTouchListener { _, event ->
+
+            when (event.actionMasked) {
+
+                MotionEvent.ACTION_DOWN -> {
+                    touchStartX = event.x
+                    touchStartY = event.y
+                    true
+                }
+
+                MotionEvent.ACTION_UP -> {
+                    val dx = (event.x - touchStartX) /
+                        gameView.width.coerceAtLeast(1)
+
+                    val dy = (event.y - touchStartY) /
+                        gameView.height.coerceAtLeast(1)
+
+                    val distance = sqrt(dx * dx + dy * dy)
+
+                    if (distance > 0.025f) {
+                        val horizontalAim =
+                            (dx * 2.4f).coerceIn(-0.85f, 0.85f)
+
+                        val power =
+                            (0.30f + distance * 1.8f)
+                                .coerceIn(0.30f, 1f)
+
+                        gameView.queueEvent {
+                            renderer.shootBall(horizontalAim, power)
+                        }
+                    }
+                    true
+                }
+
+                MotionEvent.ACTION_CANCEL -> true
+                else -> true
+            }
+        }
+
+        setContentView(root)
     }
 
     override fun onPause() {
@@ -106,10 +152,12 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
     private val ballColor = floatArrayOf(0.96f, 0.96f, 0.91f, 1f)
     private val ballModelMatrix = FloatArray(16)
     private val ballMvpMatrix = FloatArray(16)
+
     private val goalFrames = listOf(
         BallGoalFrame(goalLineZ = -52.5f),
         BallGoalFrame(goalLineZ = 52.5f)
     )
+
     private val playerColliders = mutableListOf<BallPlayerCollider>()
 
     private var pitchLightCount = 0
@@ -141,6 +189,15 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
 
     private val playerBatches = mutableListOf<PlayerBatch>()
     private val animatedPlayers = mutableListOf<AnimatedPlayer>()
+
+    // Joueur contrôlé par le joystick
+    private var controlledPlayer: MatchPlayer? = null
+    private var controlledCollider: BallPlayerCollider? = null
+
+    private var movementInputX = 0f
+    private var movementInputY = 0f
+
+    private var currentControlledAction: PlayerAction? = null
 
     private val projection = FloatArray(16)
     private val view = FloatArray(16)
@@ -174,6 +231,19 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
             gl_FragColor = uColor;
         }
     """.trimIndent()
+
+    // -------------------------------------------------
+    // COMMANDE DU JOYSTICK
+    // -------------------------------------------------
+
+    fun setMovementInput(horizontal: Float, vertical: Float) {
+        movementInputX = horizontal.coerceIn(-1f, 1f)
+        movementInputY = vertical.coerceIn(-1f, 1f)
+    }
+
+    // -------------------------------------------------
+    // INITIALISATION OPENGL
+    // -------------------------------------------------
 
     override fun onSurfaceCreated(
         gl: GL10?,
@@ -224,6 +294,7 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
         val ballVertices = buildBallSphere()
         ballVertexCount = ballVertices.size / 3
         ballBuffer = uploadStaticGeometry(ballVertices)
+
         ballPhysics.reset(BallVector3(0f, 0.12f, 0f))
 
         lastFrameNanos = System.nanoTime()
@@ -259,6 +330,10 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
             view, 0
         )
     }
+
+    // -------------------------------------------------
+    // BOUCLE DE RENDU
+    // -------------------------------------------------
 
     override fun onDrawFrame(gl: GL10?) {
 
@@ -330,13 +405,18 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
     private fun buildPlayers() {
 
         animatedPlayers.clear()
+        playerColliders.clear()
+
+        controlledPlayer = null
+        controlledCollider = null
+        currentControlledAction = null
 
         val teams = MatchTeamSetup.createMatch()
 
         var animationOffset = 0
 
         for (team in teams) {
-            for (matchPlayer in team.players) {
+            for ((playerIndex, matchPlayer) in team.players.withIndex()) {
 
                 val model = matchPlayer.model
 
@@ -359,16 +439,26 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
                     )
                 )
 
-                playerColliders.add(
-                    BallPlayerCollider(
-                        position = BallVector3(
-                            matchPlayer.x,
-                            0.42f,
-                            matchPlayer.z
-                        ),
-                        radius = 0.43f
-                    )
+                val collider = BallPlayerCollider(
+                    position = BallVector3(
+                        matchPlayer.x,
+                        0.42f,
+                        matchPlayer.z
+                    ),
+                    radius = 0.43f
                 )
+
+                playerColliders.add(collider)
+
+                // Le dernier joueur de l'équipe bleue
+                // devient le joueur commandé.
+                if (
+                    matchPlayer.team == TeamSide.BLUE &&
+                    playerIndex == team.players.lastIndex
+                ) {
+                    controlledPlayer = matchPlayer
+                    controlledCollider = collider
+                }
 
                 animationOffset++
             }
@@ -376,7 +466,7 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
     }
 
     // -------------------------------------------------
-    // CALCUL DES POSITIONS DE REPOS DES OS
+    // POSITIONS DE REPOS DES OS
     // -------------------------------------------------
 
     private fun buildBindPositions(
@@ -387,8 +477,6 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
             definitions.size
         )
 
-        // Les définitions du squelette sont ordonnées
-        // du parent vers les enfants.
         for (definition in definitions) {
 
             val local = definition.bindPosition
@@ -396,11 +484,7 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
 
             val worldPosition = if (parent == null) {
 
-                BonePosition(
-                    local.x,
-                    local.y,
-                    local.z
-                )
+                BonePosition(local.x, local.y, local.z)
 
             } else {
 
@@ -421,10 +505,61 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
     }
 
     // -------------------------------------------------
+    // DÉPLACEMENT DU JOUEUR CONTRÔLÉ
+    // -------------------------------------------------
+
+    private fun updateControlledPlayer(deltaSeconds: Float) {
+
+        val player = controlledPlayer ?: return
+        val collider = controlledCollider ?: return
+
+        val inputLength = sqrt(
+            movementInputX * movementInputX +
+                movementInputY * movementInputY
+        ).coerceAtMost(1f)
+
+        val action = when {
+            inputLength < 0.08f -> PlayerAction.IDLE
+            inputLength < 0.55f -> PlayerAction.WALK
+            else -> PlayerAction.RUN
+        }
+
+        if (currentControlledAction != action) {
+            player.model.setAction(action)
+            currentControlledAction = action
+        }
+
+        if (inputLength > 0.01f) {
+
+            val speed = 7.2f * deltaSeconds
+
+            player.x = (
+                player.x +
+                    movementInputX / inputLength * speed
+                ).coerceIn(-32f, 32f)
+
+            // Le haut du joystick avance vers le but adverse.
+            player.z = (
+                player.z -
+                    movementInputY / inputLength * speed
+                ).coerceIn(-50f, 50f)
+        }
+
+        // Synchronisation avec les collisions du ballon.
+        collider.position = BallVector3(
+            player.x,
+            0.42f,
+            player.z
+        )
+    }
+
+    // -------------------------------------------------
     // ANIMATION DES 22 JOUEURS
     // -------------------------------------------------
 
     private fun updateAnimatedPlayers(deltaSeconds: Float) {
+
+        updateControlledPlayer(deltaSeconds)
 
         val groups = LinkedHashMap<String, CpuPlayerBatch>()
 
@@ -433,9 +568,19 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
             val matchPlayer = animatedPlayer.matchPlayer
             val model = matchPlayer.model
 
+            val movementSpeed =
+                if (matchPlayer === controlledPlayer) {
+                    sqrt(
+                        movementInputX * movementInputX +
+                            movementInputY * movementInputY
+                    ).coerceIn(0f, 1f)
+                } else {
+                    0.85f
+                }
+
             model.update(
                 deltaSeconds = deltaSeconds,
-                movementSpeed = 0.85f
+                movementSpeed = movementSpeed
             )
 
             val animatedBones = model.animatedBones
@@ -531,7 +676,6 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
 
         val bone = when {
 
-            // BRAS GAUCHE
             name.contains("leftforearm") ->
                 PlayerBone.LEFT_FOREARM
 
@@ -546,7 +690,6 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
                 name.contains("leftarm") ->
                 PlayerBone.LEFT_SHOULDER
 
-            // BRAS DROIT
             name.contains("rightforearm") ->
                 PlayerBone.RIGHT_FOREARM
 
@@ -561,7 +704,6 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
                 name.contains("rightarm") ->
                 PlayerBone.RIGHT_SHOULDER
 
-            // JAMBE GAUCHE
             name.contains("leftfoot") ||
                 name.contains("leftboot") ->
                 PlayerBone.LEFT_FOOT
@@ -574,7 +716,6 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
                 name.contains("leftleg") ->
                 PlayerBone.LEFT_THIGH
 
-            // JAMBE DROITE
             name.contains("rightfoot") ||
                 name.contains("rightboot") ->
                 PlayerBone.RIGHT_FOOT
@@ -587,7 +728,6 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
                 name.contains("rightleg") ->
                 PlayerBone.RIGHT_THIGH
 
-            // TETE ET VISAGE
             name.contains("neck") ->
                 PlayerBone.NECK
 
@@ -607,7 +747,6 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
                 name.contains("chin") ->
                 PlayerBone.HEAD
 
-            // TRONC ET BASSIN
             name.contains("torso") ||
                 name.contains("chest") ||
                 name.contains("jersey") ->
@@ -648,8 +787,6 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
         val bind = transform.bindPosition
         val animated = transform.animatedBone
 
-        // Coordonnées locales du sommet par rapport
-        // à la position globale de repos de son articulation.
         val localX = x - bind.x
         val localY = y - bind.y
         val localZ = z - bind.z
@@ -665,28 +802,24 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
         val cz = cos(rotation.z)
         val sz = sin(rotation.z)
 
-        // Rotation autour de X.
         val x1 = localX
         val y1 = localY * cx - localZ * sx
         val z1 = localY * sx + localZ * cx
 
-        // Rotation autour de Y.
         val x2 = x1 * cy + z1 * sy
         val y2 = y1
         val z2 = -x1 * sy + z1 * cy
 
-        // Rotation autour de Z.
         val x3 = x2 * cz - y2 * sz
         val y3 = x2 * sz + y2 * cz
 
-        // Retour dans l'espace local du joueur.
         output[0] = animated.position.x + x3
         output[1] = animated.position.y + y3
         output[2] = animated.position.z + z2
     }
 
     // -------------------------------------------------
-    // MISE A JOUR DES BUFFERS GPU
+    // BUFFERS GPU DES JOUEURS
     // -------------------------------------------------
 
     private fun updatePlayerGpuBuffers(
@@ -774,13 +907,9 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
     }
 
     // -------------------------------------------------
-    // BALLON : PHYSIQUE, COMMANDES ET RENDU 3D
+    // COMMANDES DU BALLON
     // -------------------------------------------------
 
-    /**
-     * Appelée depuis le thread OpenGL après un geste tactile.
-     * Le ballon est frappé vers le but opposé, avec une visée latérale.
-     */
     fun shootBall(horizontalAim: Float, power: Float) {
         val direction = BallVector3(
             horizontalAim.coerceIn(-0.85f, 0.85f),
@@ -795,33 +924,27 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
         )
     }
 
-    /**
-     * Passe courte.
-     */
     fun passBall(horizontalAim: Float, power: Float = 0.35f) {
         val direction = createBallDirection(horizontalAim)
+
         ballPhysics.pass(
             direction = direction,
             power = power.coerceIn(0.15f, 0.65f)
         )
     }
 
-    /**
-     * Passe en profondeur.
-     */
     fun throughPassBall(horizontalAim: Float, power: Float = 0.55f) {
         val direction = createBallDirection(horizontalAim)
+
         ballPhysics.throughPass(
             direction = direction,
             power = power.coerceIn(0.30f, 0.80f)
         )
     }
 
-    /**
-     * Passe longue : profil de frappe plus puissant et plus haut.
-     */
     fun longPassBall(horizontalAim: Float, power: Float = 0.72f) {
         val direction = createBallDirection(horizontalAim)
+
         ballPhysics.kick(
             direction = direction,
             power = power.coerceIn(0.45f, 0.90f),
@@ -829,14 +952,11 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
         )
     }
 
-    /**
-     * Centre : frappe diagonale avec une trajectoire aérienne.
-     * Le système de réception sera ajouté ultérieurement.
-     */
     fun crossBall(side: Float, power: Float = 0.68f) {
         val direction = createBallDirection(
             horizontalAim = side.coerceIn(-0.85f, 0.85f)
         )
+
         ballPhysics.kick(
             direction = direction,
             power = power.coerceIn(0.40f, 0.85f),
@@ -844,11 +964,9 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
         )
     }
 
-    /**
-     * Tir placé avec effet.
-     */
     fun placedShotBall(horizontalAim: Float, power: Float = 0.62f) {
         val direction = createBallDirection(horizontalAim)
+
         ballPhysics.curveShoot(
             direction = direction,
             power = power.coerceIn(0.35f, 0.80f),
@@ -857,16 +975,10 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
         )
     }
 
-    /**
-     * Tir puissant.
-     */
     fun powerShotBall(horizontalAim: Float, power: Float = 1f) {
         shootBall(horizontalAim, power.coerceIn(0.70f, 1f))
     }
 
-    /**
-     * Direction vers le but opposé.
-     */
     private fun createBallDirection(horizontalAim: Float): BallVector3 {
         return BallVector3(
             horizontalAim.coerceIn(-0.85f, 0.85f),
@@ -876,6 +988,7 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
     }
 
     private fun updateBall(deltaSeconds: Float) {
+
         val events = ballPhysics.update(
             deltaSeconds = deltaSeconds,
             players = playerColliders,
@@ -883,22 +996,24 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
         )
 
         if (events.any { it.type == BallEventType.GOAL }) {
-            // Remise au centre après un but. Le comptage du score
-            // sera relié au futur gestionnaire de match.
             ballPhysics.reset(BallVector3(0f, 0.12f, 0f))
         }
     }
 
-    /**
-     * Sphère triangulée légère : 10 x 14 segments.
-     */
+    // -------------------------------------------------
+    // CONSTRUCTION DU BALLON
+    // -------------------------------------------------
+
     private fun buildBallSphere(): FloatArray {
+
         val output = FloatArrayBuilder(10 * 14 * 18)
+
         val latitudeSegments = 10
         val longitudeSegments = 14
 
         fun vertex(theta: Double, phi: Double): FloatArray {
             val st = sin(theta)
+
             return floatArrayOf(
                 (st * cos(phi)).toFloat(),
                 cos(theta).toFloat(),
@@ -907,10 +1022,12 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
         }
 
         for (lat in 0 until latitudeSegments) {
+
             val theta1 = Math.PI * lat / latitudeSegments
             val theta2 = Math.PI * (lat + 1) / latitudeSegments
 
             for (lon in 0 until longitudeSegments) {
+
                 val phi1 = 2.0 * Math.PI * lon / longitudeSegments
                 val phi2 = 2.0 * Math.PI * (lon + 1) / longitudeSegments
 
@@ -919,28 +1036,43 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
                 val c = vertex(theta2, phi2)
                 val d = vertex(theta1, phi2)
 
-                output.add(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2])
-                output.add(a[0], a[1], a[2], c[0], c[1], c[2], d[0], d[1], d[2])
+                output.add(
+                    a[0], a[1], a[2],
+                    b[0], b[1], b[2],
+                    c[0], c[1], c[2]
+                )
+
+                output.add(
+                    a[0], a[1], a[2],
+                    c[0], c[1], c[2],
+                    d[0], d[1], d[2]
+                )
             }
         }
+
         return output.toArray()
     }
 
     private fun drawBall() {
+
         if (ballBuffer == 0 || ballVertexCount == 0) return
 
         val ballPosition = ballPhysics.position
+
         Matrix.setIdentityM(ballModelMatrix, 0)
+
         Matrix.translateM(
             ballModelMatrix, 0,
             ballPosition.x,
             ballPosition.y,
             ballPosition.z
         )
+
         Matrix.scaleM(
             ballModelMatrix, 0,
             0.11f, 0.11f, 0.11f
         )
+
         Matrix.multiplyMM(
             ballMvpMatrix, 0,
             viewProjection, 0,
@@ -948,17 +1080,28 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
         )
 
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, ballBuffer)
+
         GLES20.glEnableVertexAttribArray(positionHandle)
+
         GLES20.glVertexAttribPointer(
-            positionHandle, 3, GLES20.GL_FLOAT, false, 0, 0
+            positionHandle,
+            3,
+            GLES20.GL_FLOAT,
+            false,
+            0,
+            0
         )
+
         GLES20.glUniformMatrix4fv(
             matrixHandle, 1, false, ballMvpMatrix, 0
         )
+
         GLES20.glUniform4fv(colorHandle, 1, ballColor, 0)
+
         GLES20.glDrawArrays(
             GLES20.GL_TRIANGLES, 0, ballVertexCount
         )
+
         GLES20.glDisableVertexAttribArray(positionHandle)
     }
 
@@ -1146,7 +1289,7 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
     }
 
     // -------------------------------------------------
-    // RENDU
+    // RENDU DES BUFFERS
     // -------------------------------------------------
 
     private fun drawStaticBuffer(
@@ -1195,8 +1338,15 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
         fragmentSource: String
     ): Int {
 
-        val vertex = compileShader(GLES20.GL_VERTEX_SHADER, vertexSource)
-        val fragment = compileShader(GLES20.GL_FRAGMENT_SHADER, fragmentSource)
+        val vertex = compileShader(
+            GLES20.GL_VERTEX_SHADER,
+            vertexSource
+        )
+
+        val fragment = compileShader(
+            GLES20.GL_FRAGMENT_SHADER,
+            fragmentSource
+        )
 
         if (vertex == 0 || fragment == 0) {
             if (vertex != 0) GLES20.glDeleteShader(vertex)
