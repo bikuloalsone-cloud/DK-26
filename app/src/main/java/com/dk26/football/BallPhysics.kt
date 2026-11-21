@@ -3,7 +3,6 @@ package com.dk26.football
 
 import kotlin.math.abs
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
@@ -50,6 +49,9 @@ data class BallVector3(
     }
 }
 
+/**
+ * Configuration complète du moteur physique.
+ */
 data class BallPhysicsConfig(
     val radius: Float = 0.11f,
     val mass: Float = 0.43f,
@@ -57,12 +59,25 @@ data class BallPhysicsConfig(
     val groundRestitution: Float = 0.48f,
     val groundFriction: Float = 0.985f,
     val airResistance: Float = 0.012f,
+    val magnusCoefficient: Float = 0.0018f,
+    val spinDamping: Float = 0.985f,
+    val pitchHalfWidth: Float = 34f,
+    val pitchHalfLength: Float = 52.5f,
+    val maximumSpeed: Float = 42f
+)
+
+/**
+ * Collision entre un joueur et le ballon.
+ */
 data class BallPlayerCollider(
     var position: BallVector3,
     val radius: Float = 0.38f,
     var velocity: BallVector3 = BallVector3.ZERO
 )
 
+/**
+ * Structure des buts.
+ */
 data class BallGoalFrame(
     val centerX: Float = 0f,
     val goalLineZ: Float,
@@ -135,8 +150,6 @@ class BallPhysics(
 
     /**
      * Frappe générale.
-     * direction détermine la trajectoire.
-     * power est compris entre 0 et 1.
      */
     fun kick(
         direction: BallVector3,
@@ -144,7 +157,6 @@ class BallPhysics(
         lift: Float = 0.08f,
         spinEffect: BallVector3 = BallVector3.ZERO
     ) {
-
         val strength = power.coerceIn(0f, 1f)
         if (strength <= 0f) return
 
@@ -267,9 +279,6 @@ class BallPhysics(
 
     /**
      * Mise à jour physique.
-     *
-     * Les événements produits pendant cette mise à jour
-     * sont retournés à l'appelant.
      */
     fun update(
         deltaSeconds: Float,
@@ -294,7 +303,6 @@ class BallPhysics(
         val stepTime = frameTime / steps
 
         repeat(steps) {
-
             val previousPosition = position
 
             integrate(stepTime)
@@ -323,11 +331,9 @@ class BallPhysics(
     }
 
     /**
-     * Intégration : gravité, résistance de l'air,
-     * effet Magnus et rotation.
+     * Gravité, résistance de l'air et effet Magnus.
      */
     private fun integrate(delta: Float) {
-
         val speed = velocity.length()
 
         val gravityAcceleration = BallVector3(
@@ -364,7 +370,6 @@ class BallPhysics(
      * Collision avec le sol.
      */
     private fun collideWithGround() {
-
         if (position.y >= safeRadius) return
 
         val impact = abs(velocity.y)
@@ -372,7 +377,6 @@ class BallPhysics(
         position = position.withY(safeRadius)
 
         if (velocity.y < 0f) {
-
             val rebound = impact * config.groundRestitution
 
             velocity = velocity.withY(
@@ -403,10 +407,9 @@ class BallPhysics(
     private fun collideWithPlayers(
         players: List<BallPlayerCollider>
     ) {
-
         for (player in players) {
-
             val difference = position - player.position
+
             val minimumDistance = safeRadius +
                 player.radius.coerceAtLeast(0.05f)
 
@@ -425,7 +428,6 @@ class BallPhysics(
             val normalSpeed = relativeVelocity.dot(normal)
 
             if (normalSpeed < 0f) {
-
                 val restitution = 0.55f
 
                 val impulse = normal * (
@@ -449,7 +451,6 @@ class BallPhysics(
 
     /**
      * Collision du ballon contre un segment.
-     * Sert aux poteaux et à la barre transversale.
      */
     private fun collideWithSegment(
         start: BallVector3,
@@ -489,14 +490,12 @@ class BallPhysics(
     }
 
     /**
-     * Poteaux verticaux et barre horizontale.
+     * Collision avec les poteaux et la barre transversale.
      */
     private fun collideWithGoals(
         goals: List<BallGoalFrame>
     ) {
-
         for (goal in goals) {
-
             val leftX = goal.centerX - goal.halfWidth
             val rightX = goal.centerX + goal.halfWidth
             val z = goal.goalLineZ
@@ -565,9 +564,7 @@ class BallPhysics(
         current: BallVector3,
         goals: List<BallGoalFrame>
     ) {
-
         for (goal in goals) {
-
             val line = goal.goalLineZ
 
             val crossed = (
@@ -603,7 +600,6 @@ class BallPhysics(
                 crossingY > safeRadius
 
             if (insideWidth && insideHeight) {
-
                 events.add(
                     BallEvent(
                         BallEventType.GOAL,
@@ -612,6 +608,8 @@ class BallPhysics(
                     )
                 )
 
+                velocity = BallVector3.ZERO
+                spin = BallVector3.ZERO
                 isMoving = false
                 return
             }
@@ -619,16 +617,13 @@ class BallPhysics(
     }
 
     /**
-     * Empêche le ballon de traverser les limites latérales
-     * et les lignes de sortie du terrain.
+     * Limites du terrain.
      */
     private fun enforcePitchBounds() {
-
         val limitX = config.pitchHalfWidth - safeRadius
         val limitZ = config.pitchHalfLength - safeRadius
 
         if (abs(position.x) > limitX) {
-
             position = position.copy(
                 x = position.x.coerceIn(-limitX, limitX)
             )
@@ -646,7 +641,6 @@ class BallPhysics(
         }
 
         if (abs(position.z) > limitZ) {
-
             position = position.copy(
                 z = position.z.coerceIn(-limitZ, limitZ)
             )
