@@ -89,7 +89,7 @@ class MainActivity : Activity() {
     }
 }
 
-private class DK26Renderer : GLSurfaceView.Renderer {
+internal class DK26Renderer : GLSurfaceView.Renderer {
 
     private var program = 0
     private var positionHandle = -1
