@@ -130,8 +130,6 @@ class GameActivity : Activity(), GameCommandListener {
     private lateinit var renderer: DK26Renderer
     private lateinit var statusText: TextView
 
-    private var lastShotPower = 0.65f
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -170,6 +168,7 @@ class GameActivity : Activity(), GameCommandListener {
             setTextColor(Color.WHITE)
             typeface = Typeface.DEFAULT_BOLD
             setPadding(16, 10, 16, 10)
+
             background = GradientDrawable().apply {
                 setColor(Color.argb(175, 5, 20, 12))
                 cornerRadius = 12f
@@ -199,68 +198,94 @@ class GameActivity : Activity(), GameCommandListener {
     }
 
     override fun onGameCommand(command: GameCommand) {
+
         when (command) {
 
+            // PASSES
+            GameCommand.PASS_SHORT -> {
+                executeBallCommand("PASSE COURTE") {
+                    renderer.passBall(0f, 0.35f)
+                }
+            }
+
+            GameCommand.PASS_THROUGH -> {
+                executeBallCommand("PASSE EN PROFONDEUR") {
+                    renderer.throughPassBall(0f, 0.55f)
+                }
+            }
+
+            GameCommand.PASS_LONG -> {
+                executeBallCommand("PASSE LONGUE") {
+                    renderer.longPassBall(0f, 0.72f)
+                }
+            }
+
+            GameCommand.CROSS -> {
+                executeBallCommand("CENTRE") {
+                    renderer.crossBall(0.65f, 0.68f)
+                }
+            }
+
+            // TIRS
             GameCommand.SHOOT -> {
-                lastShotPower = 0.65f
-                shoot(0f, lastShotPower, "TIR")
+                executeBallCommand("TIR") {
+                    renderer.shootBall(0f, 0.65f)
+                }
             }
 
             GameCommand.SHOOT_POWER -> {
-                lastShotPower = 1f
-                shoot(0f, lastShotPower, "TIR PUISSANT")
+                executeBallCommand("TIR PUISSANT") {
+                    renderer.powerShotBall(0f, 1f)
+                }
             }
 
             GameCommand.SHOOT_PLACED -> {
-                lastShotPower = 0.48f
-                shoot(0.25f, lastShotPower, "TIR PLACE")
+                executeBallCommand("TIR PLACE") {
+                    renderer.placedShotBall(0.25f, 0.62f)
+                }
             }
 
             GameCommand.SHOOT_VOLLEY -> {
-                lastShotPower = 0.85f
-                shoot(0f, lastShotPower, "VOLEE")
+                executeBallCommand("TIR TYPE VOLEE") {
+                    renderer.shootBall(0f, 0.85f)
+                }
             }
 
-            GameCommand.PASS_SHORT ->
-                showPending("PASSE COURTE")
+            // DEFENSE : LOGIQUE A DEVELOPPER
+            GameCommand.TACKLE_STANDING -> {
+                showPending("TACLE : IA DEFENSIVE A DEVELOPPER")
+            }
 
-            GameCommand.PASS_THROUGH ->
-                showPending("PASSE EN PROFONDEUR")
+            GameCommand.TACKLE_SLIDE -> {
+                showPending("GLISSADE : ANIMATION A DEVELOPPER")
+            }
 
-            GameCommand.PASS_LONG ->
-                showPending("PASSE LONGUE")
+            GameCommand.PRESSING_ON -> {
+                showPending("PRESSING : ACTIVATION A DEVELOPPER")
+            }
 
-            GameCommand.CROSS ->
-                showPending("CENTRE")
-
-            GameCommand.TACKLE_STANDING ->
-                showPending("TACLE")
-
-            GameCommand.TACKLE_SLIDE ->
-                showPending("GLISSADE")
-
-            GameCommand.PRESSING_ON ->
-                showPending("PRESSING")
-
-            GameCommand.PRESSING_OFF ->
-                showPending("PRESSING DESACTIVE")
+            GameCommand.PRESSING_OFF -> {
+                showPending("PRESSING : DESACTIVATION A DEVELOPPER")
+            }
         }
     }
 
-    private fun shoot(
-        horizontalAim: Float,
-        power: Float,
-        label: String
+    /**
+     * Exécute une commande sur le thread OpenGL.
+     */
+    private fun executeBallCommand(
+        label: String,
+        action: () -> Unit
     ) {
         gameView.queueEvent {
-            renderer.shootBall(horizontalAim, power)
+            action()
         }
 
         statusText.text = "DK 26  |  $label"
     }
 
     private fun showPending(label: String) {
-        statusText.text = "DK 26  |  $label : INTEGRATION A VENIR"
+        statusText.text = "DK 26  |  $label"
     }
 
     override fun onPause() {
@@ -272,6 +297,7 @@ class GameActivity : Activity(), GameCommandListener {
 
     override fun onResume() {
         super.onResume()
+
         if (::gameView.isInitialized) {
             gameView.onResume()
         }
