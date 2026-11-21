@@ -248,7 +248,7 @@ class Player3DModel private constructor(
             rz: Float
         ): FloatArray {
 
-            val output = FloatArrayBuilder(
+            val output = PlayerModelFloatArrayBuilder(
                 LATITUDE_SEGMENTS *
                     LONGITUDE_SEGMENTS * 18
             )
@@ -314,10 +314,10 @@ class Player3DModel private constructor(
 }
 
 /**
- * Constructeur compact de tableaux de sommets.
- * Évite les allocations Float temporaires de ArrayList<Float>.
+ * Constructeur de tableaux propre à Player3DModel.
+ * Son nom évite tout conflit avec MainActivity.kt.
  */
-private class FloatArrayBuilder(
+private class PlayerModelFloatArrayBuilder(
     initialCapacity: Int = 1024
 ) {
 
