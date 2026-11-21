@@ -65,9 +65,10 @@ data class BallPhysicsConfig(
 )
 
 data class BallPlayerCollider(
-    val position: BallVector3,
+    var position: BallVector3,
     val radius: Float = 0.38f,
-    val velocity: BallVector3 = BallVector3.ZERO
+    var velocity: BallVector3 = BallVector3.ZERO
+)
 )
 
 data class BallGoalFrame(
