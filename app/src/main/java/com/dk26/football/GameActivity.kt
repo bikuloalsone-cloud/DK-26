@@ -24,6 +24,7 @@ enum class GameCommand {
     SHOOT,
     SHOOT_POWER,
     SHOOT_PLACED,
+    SHOOT_CURVE,
     SHOOT_VOLLEY,
     TACKLE_STANDING,
     TACKLE_SLIDE,
@@ -56,6 +57,7 @@ class GameControlsOverlay(
         addButton(rightPanel, "TIR", GameCommand.SHOOT)
         addButton(rightPanel, "TIR PUISSANT", GameCommand.SHOOT_POWER)
         addButton(rightPanel, "TIR PLACE", GameCommand.SHOOT_PLACED)
+        addButton(rightPanel, "TIR ENROULE", GameCommand.SHOOT_CURVE)
         addButton(rightPanel, "VOLEE", GameCommand.SHOOT_VOLLEY)
         addButton(rightPanel, "PRESSING", GameCommand.PRESSING_ON)
         addButton(rightPanel, "ARRETER PRESSING", GameCommand.PRESSING_OFF)
@@ -201,7 +203,6 @@ class GameActivity : Activity(), GameCommandListener {
 
         when (command) {
 
-            // PASSES
             GameCommand.PASS_SHORT -> {
                 executeBallCommand("PASSE COURTE") {
                     renderer.passBall(0f, 0.35f)
@@ -226,7 +227,6 @@ class GameActivity : Activity(), GameCommandListener {
                 }
             }
 
-            // TIRS
             GameCommand.SHOOT -> {
                 executeBallCommand("TIR") {
                     renderer.shootBall(0f, 0.65f)
@@ -245,13 +245,18 @@ class GameActivity : Activity(), GameCommandListener {
                 }
             }
 
+            GameCommand.SHOOT_CURVE -> {
+                executeBallCommand("TIR ENROULE") {
+                    renderer.placedShotBall(-0.40f, 0.75f)
+                }
+            }
+
             GameCommand.SHOOT_VOLLEY -> {
                 executeBallCommand("TIR TYPE VOLEE") {
                     renderer.shootBall(0f, 0.85f)
                 }
             }
 
-            // DEFENSE : LOGIQUE A DEVELOPPER
             GameCommand.TACKLE_STANDING -> {
                 showPending("TACLE : IA DEFENSIVE A DEVELOPPER")
             }
@@ -270,9 +275,6 @@ class GameActivity : Activity(), GameCommandListener {
         }
     }
 
-    /**
-     * Exécute une commande sur le thread OpenGL.
-     */
     private fun executeBallCommand(
         label: String,
         action: () -> Unit
