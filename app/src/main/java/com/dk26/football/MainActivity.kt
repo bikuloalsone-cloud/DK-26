@@ -8,6 +8,7 @@ import android.opengl.GLSurfaceView
 import android.opengl.Matrix
 import android.os.Bundle
 import android.view.View
+import android.view.MotionEvent
 import android.view.WindowManager
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -20,6 +21,9 @@ import kotlin.math.sin
 class MainActivity : Activity() {
 
     private lateinit var gameView: GLSurfaceView
+    private lateinit var renderer: DK26Renderer
+    private var touchStartX = 0f
+    private var touchStartY = 0f
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,11 +40,42 @@ class MainActivity : Activity() {
 
         gameView = GLSurfaceView(this).apply {
             setEGLContextClientVersion(2)
-            setRenderer(DK26Renderer())
+            renderer = DK26Renderer()
+            setRenderer(renderer)
             renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
         }
 
         setContentView(gameView)
+    }
+
+    /**
+     * Un glissement sur l'écran déclenche un tir.
+     * La direction horizontale règle l'angle ; la longueur du geste règle la puissance.
+     */
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                touchStartX = event.x
+                touchStartY = event.y
+                return true
+            }
+
+            MotionEvent.ACTION_UP -> {
+                val dx = (event.x - touchStartX) / gameView.width.coerceAtLeast(1)
+                val dy = (event.y - touchStartY) / gameView.height.coerceAtLeast(1)
+                val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+
+                if (distance > 0.025f) {
+                    val horizontalAim = (dx * 2.4f).coerceIn(-0.85f, 0.85f)
+                    val power = (0.30f + distance * 1.8f).coerceIn(0.30f, 1f)
+                    gameView.queueEvent {
+                        renderer.shootBall(horizontalAim, power)
+                    }
+                }
+                return true
+            }
+        }
+        return true
     }
 
     override fun onPause() {
@@ -64,6 +99,18 @@ private class DK26Renderer : GLSurfaceView.Renderer {
     private var pitchLightBuffer = 0
     private var pitchDarkBuffer = 0
     private var linesBuffer = 0
+    private var ballBuffer = 0
+    private var ballVertexCount = 0
+
+    private val ballPhysics = BallPhysics()
+    private val ballColor = floatArrayOf(0.96f, 0.96f, 0.91f, 1f)
+    private val ballModelMatrix = FloatArray(16)
+    private val ballMvpMatrix = FloatArray(16)
+    private val goalFrames = listOf(
+        BallGoalFrame(goalLineZ = -52.5f),
+        BallGoalFrame(goalLineZ = 52.5f)
+    )
+    private val playerColliders = mutableListOf<BallPlayerCollider>()
 
     private var pitchLightCount = 0
     private var pitchDarkCount = 0
@@ -174,6 +221,11 @@ private class DK26Renderer : GLSurfaceView.Renderer {
 
         buildPlayers()
 
+        val ballVertices = buildBallSphere()
+        ballVertexCount = ballVertices.size / 3
+        ballBuffer = uploadStaticGeometry(ballVertices)
+        ballPhysics.reset(BallVector3(0f, 0.12f, 0f))
+
         lastFrameNanos = System.nanoTime()
     }
 
@@ -230,6 +282,7 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         lastFrameNanos = now
 
         updateAnimatedPlayers(deltaSeconds)
+        updateBall(deltaSeconds)
 
         GLES20.glUseProgram(program)
 
@@ -264,6 +317,8 @@ private class DK26Renderer : GLSurfaceView.Renderer {
                 batch.color
             )
         }
+
+        drawBall()
 
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
     }
@@ -301,6 +356,17 @@ private class DK26Renderer : GLSurfaceView.Renderer {
                         matchPlayer = matchPlayer,
                         parts = model.geometry.parts,
                         bindPositions = bindPositions
+                    )
+                )
+
+                playerColliders.add(
+                    BallPlayerCollider(
+                        position = BallVector3(
+                            matchPlayer.x,
+                            0.42f,
+                            matchPlayer.z
+                        ),
+                        radius = 0.43f
                     )
                 )
 
@@ -705,6 +771,115 @@ private class DK26Renderer : GLSurfaceView.Renderer {
         )
 
         return bufferId
+    }
+
+    // -------------------------------------------------
+    // BALLON : PHYSIQUE, COMMANDES ET RENDU 3D
+    // -------------------------------------------------
+
+    /**
+     * Appelée depuis le thread OpenGL après un geste tactile.
+     * Le ballon est frappé vers le but opposé, avec une visée latérale.
+     */
+    fun shootBall(horizontalAim: Float, power: Float) {
+        val direction = BallVector3(
+            horizontalAim.coerceIn(-0.85f, 0.85f),
+            0f,
+            -1f
+        ).normalized()
+
+        ballPhysics.shoot(
+            direction = direction,
+            power = power.coerceIn(0.25f, 1f),
+            lift = 0.12f
+        )
+    }
+
+    private fun updateBall(deltaSeconds: Float) {
+        val events = ballPhysics.update(
+            deltaSeconds = deltaSeconds,
+            players = playerColliders,
+            goals = goalFrames
+        )
+
+        if (events.any { it.type == BallEventType.GOAL }) {
+            // Remise au centre après un but. Le comptage du score
+            // sera relié au futur gestionnaire de match.
+            ballPhysics.reset(BallVector3(0f, 0.12f, 0f))
+        }
+    }
+
+    /**
+     * Sphère triangulée légère : 10 x 14 segments.
+     */
+    private fun buildBallSphere(): FloatArray {
+        val output = FloatArrayBuilder(10 * 14 * 18)
+        val latitudeSegments = 10
+        val longitudeSegments = 14
+
+        fun vertex(theta: Double, phi: Double): FloatArray {
+            val st = sin(theta)
+            return floatArrayOf(
+                (st * cos(phi)).toFloat(),
+                cos(theta).toFloat(),
+                (st * sin(phi)).toFloat()
+            )
+        }
+
+        for (lat in 0 until latitudeSegments) {
+            val theta1 = Math.PI * lat / latitudeSegments
+            val theta2 = Math.PI * (lat + 1) / latitudeSegments
+
+            for (lon in 0 until longitudeSegments) {
+                val phi1 = 2.0 * Math.PI * lon / longitudeSegments
+                val phi2 = 2.0 * Math.PI * (lon + 1) / longitudeSegments
+
+                val a = vertex(theta1, phi1)
+                val b = vertex(theta2, phi1)
+                val c = vertex(theta2, phi2)
+                val d = vertex(theta1, phi2)
+
+                output.add(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2])
+                output.add(a[0], a[1], a[2], c[0], c[1], c[2], d[0], d[1], d[2])
+            }
+        }
+        return output.toArray()
+    }
+
+    private fun drawBall() {
+        if (ballBuffer == 0 || ballVertexCount == 0) return
+
+        val ballPosition = ballPhysics.position
+        Matrix.setIdentityM(ballModelMatrix, 0)
+        Matrix.translateM(
+            ballModelMatrix, 0,
+            ballPosition.x,
+            ballPosition.y,
+            ballPosition.z
+        )
+        Matrix.scaleM(
+            ballModelMatrix, 0,
+            0.11f, 0.11f, 0.11f
+        )
+        Matrix.multiplyMM(
+            ballMvpMatrix, 0,
+            viewProjection, 0,
+            ballModelMatrix, 0
+        )
+
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, ballBuffer)
+        GLES20.glEnableVertexAttribArray(positionHandle)
+        GLES20.glVertexAttribPointer(
+            positionHandle, 3, GLES20.GL_FLOAT, false, 0, 0
+        )
+        GLES20.glUniformMatrix4fv(
+            matrixHandle, 1, false, ballMvpMatrix, 0
+        )
+        GLES20.glUniform4fv(colorHandle, 1, ballColor, 0)
+        GLES20.glDrawArrays(
+            GLES20.GL_TRIANGLES, 0, ballVertexCount
+        )
+        GLES20.glDisableVertexAttribArray(positionHandle)
     }
 
     // -------------------------------------------------
