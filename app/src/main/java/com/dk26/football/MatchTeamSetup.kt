@@ -8,8 +8,8 @@ enum class TeamSide {
 data class MatchPlayer(
     val player: FootballPlayer,
     val team: TeamSide,
-    val x: Float,
-    val z: Float,
+    var x: Float,
+    var z: Float,
     val shirtColor: FloatArray,
     val model: Player3DModel
 )
