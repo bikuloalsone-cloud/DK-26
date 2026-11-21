@@ -795,6 +795,86 @@ internal class DK26Renderer : GLSurfaceView.Renderer {
         )
     }
 
+    /**
+     * Passe courte.
+     */
+    fun passBall(horizontalAim: Float, power: Float = 0.35f) {
+        val direction = createBallDirection(horizontalAim)
+        ballPhysics.pass(
+            direction = direction,
+            power = power.coerceIn(0.15f, 0.65f)
+        )
+    }
+
+    /**
+     * Passe en profondeur.
+     */
+    fun throughPassBall(horizontalAim: Float, power: Float = 0.55f) {
+        val direction = createBallDirection(horizontalAim)
+        ballPhysics.throughPass(
+            direction = direction,
+            power = power.coerceIn(0.30f, 0.80f)
+        )
+    }
+
+    /**
+     * Passe longue : profil de frappe plus puissant et plus haut.
+     */
+    fun longPassBall(horizontalAim: Float, power: Float = 0.72f) {
+        val direction = createBallDirection(horizontalAim)
+        ballPhysics.kick(
+            direction = direction,
+            power = power.coerceIn(0.45f, 0.90f),
+            lift = 0.30f
+        )
+    }
+
+    /**
+     * Centre : frappe diagonale avec une trajectoire aérienne.
+     * Le système de réception sera ajouté ultérieurement.
+     */
+    fun crossBall(side: Float, power: Float = 0.68f) {
+        val direction = createBallDirection(
+            horizontalAim = side.coerceIn(-0.85f, 0.85f)
+        )
+        ballPhysics.kick(
+            direction = direction,
+            power = power.coerceIn(0.40f, 0.85f),
+            lift = 0.42f
+        )
+    }
+
+    /**
+     * Tir placé avec effet.
+     */
+    fun placedShotBall(horizontalAim: Float, power: Float = 0.62f) {
+        val direction = createBallDirection(horizontalAim)
+        ballPhysics.curveShoot(
+            direction = direction,
+            power = power.coerceIn(0.35f, 0.80f),
+            curve = 3.5f,
+            lift = 0.12f
+        )
+    }
+
+    /**
+     * Tir puissant.
+     */
+    fun powerShotBall(horizontalAim: Float, power: Float = 1f) {
+        shootBall(horizontalAim, power.coerceIn(0.70f, 1f))
+    }
+
+    /**
+     * Direction vers le but opposé.
+     */
+    private fun createBallDirection(horizontalAim: Float): BallVector3 {
+        return BallVector3(
+            horizontalAim.coerceIn(-0.85f, 0.85f),
+            0f,
+            -1f
+        ).normalized()
+    }
+
     private fun updateBall(deltaSeconds: Float) {
         val events = ballPhysics.update(
             deltaSeconds = deltaSeconds,
