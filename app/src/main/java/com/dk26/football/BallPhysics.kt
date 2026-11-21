@@ -57,18 +57,10 @@ data class BallPhysicsConfig(
     val groundRestitution: Float = 0.48f,
     val groundFriction: Float = 0.985f,
     val airResistance: Float = 0.012f,
-    val magnusCoefficient: Float = 0.0018f,
-    val spinDamping: Float = 0.985f,
-    val pitchHalfWidth: Float = 34f,
-    val pitchHalfLength: Float = 52.5f,
-    val maximumSpeed: Float = 42f
-)
-
 data class BallPlayerCollider(
     var position: BallVector3,
     val radius: Float = 0.38f,
     var velocity: BallVector3 = BallVector3.ZERO
-)
 )
 
 data class BallGoalFrame(
