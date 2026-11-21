@@ -1,24 +1,21 @@
+
 package com.dk26.football
 
 import android.app.Activity
+import android.content.pm.ActivityInfo
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.opengl.GLSurfaceView
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 
-/**
- * Commandes tactiles de DK 26.
- *
- * Cette première version crée l'écran de commandes et expose les actions
- * via GameCommandListener. Le raccordement au moteur OpenGL/à BallPhysics
- * sera fait dans l'étape suivante, sans modifier les boutons.
- */
 enum class GameCommand {
     PASS_SHORT,
     PASS_THROUGH,
@@ -38,80 +35,60 @@ fun interface GameCommandListener {
     fun onGameCommand(command: GameCommand)
 }
 
-/**
- * HUD réutilisable : peut être superposé plus tard à la GLSurfaceView
- * existante avec FrameLayout.addView().
- */
 class GameControlsOverlay(
     activity: Activity,
     private val commandListener: GameCommandListener
 ) : FrameLayout(activity) {
 
-    private var pressingEnabled = false
-    private val pressingButton: Button
-
     init {
-        layoutParams = LayoutParams(
-            LayoutParams.MATCH_PARENT,
-            LayoutParams.MATCH_PARENT
-        )
         isClickable = false
-        isFocusable = false
 
-        val leftPanel = panel(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.BOTTOM or Gravity.START
-        }
+        val leftPanel = createPanel(activity)
+        val rightPanel = createPanel(activity)
 
-        addButton(leftPanel, "PASSE COURTE", GameCommand.PASS_SHORT)
+        addButton(leftPanel, "PASSE", GameCommand.PASS_SHORT)
         addButton(leftPanel, "PASSE EN PROFONDEUR", GameCommand.PASS_THROUGH)
         addButton(leftPanel, "PASSE LONGUE", GameCommand.PASS_LONG)
         addButton(leftPanel, "CENTRE", GameCommand.CROSS)
-        addButton(leftPanel, "TACLE DEBOUT", GameCommand.TACKLE_STANDING)
-        addButton(leftPanel, "TACLE GLISSÉ", GameCommand.TACKLE_SLIDE)
-
-        val rightPanel = panel(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.BOTTOM or Gravity.END
-        }
+        addButton(leftPanel, "TACLE", GameCommand.TACKLE_STANDING)
+        addButton(leftPanel, "GLISSADE", GameCommand.TACKLE_SLIDE)
 
         addButton(rightPanel, "TIR", GameCommand.SHOOT)
         addButton(rightPanel, "TIR PUISSANT", GameCommand.SHOOT_POWER)
-        addButton(rightPanel, "TIR PLACÉ", GameCommand.SHOOT_PLACED)
-        addButton(rightPanel, "VOLÉE", GameCommand.SHOOT_VOLLEY)
-
-        pressingButton = createButton("PRESSING : OFF").apply {
-            setOnClickListener {
-                pressingEnabled = !pressingEnabled
-                text = if (pressingEnabled) "PRESSING : ON" else "PRESSING : OFF"
-                commandListener.onGameCommand(
-                    if (pressingEnabled) GameCommand.PRESSING_ON
-                    else GameCommand.PRESSING_OFF
-                )
-            }
-        }
-        rightPanel.addView(pressingButton)
+        addButton(rightPanel, "TIR PLACE", GameCommand.SHOOT_PLACED)
+        addButton(rightPanel, "VOLEE", GameCommand.SHOOT_VOLLEY)
+        addButton(rightPanel, "PRESSING", GameCommand.PRESSING_ON)
+        addButton(rightPanel, "ARRETER PRESSING", GameCommand.PRESSING_OFF)
 
         val leftParams = LayoutParams(
             LayoutParams.WRAP_CONTENT,
             LayoutParams.WRAP_CONTENT,
             Gravity.BOTTOM or Gravity.START
-        ).apply {
-            leftMargin = dp(12)
-            bottomMargin = dp(12)
-        }
+        )
+        leftParams.setMargins(18, 0, 0, 18)
 
         val rightParams = LayoutParams(
             LayoutParams.WRAP_CONTENT,
             LayoutParams.WRAP_CONTENT,
             Gravity.BOTTOM or Gravity.END
-        ).apply {
-            rightMargin = dp(12)
-            bottomMargin = dp(12)
-        }
+        )
+        rightParams.setMargins(0, 0, 18, 18)
 
         addView(leftPanel, leftParams)
         addView(rightPanel, rightParams)
+    }
+
+    private fun createPanel(activity: Activity): LinearLayout {
+        return LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(8, 8, 8, 8)
+
+            background = GradientDrawable().apply {
+                setColor(Color.argb(115, 5, 12, 8))
+                cornerRadius = 18f
+            }
+        }
     }
 
     private fun addButton(
@@ -119,69 +96,47 @@ class GameControlsOverlay(
         label: String,
         command: GameCommand
     ) {
-        val button = createButton(label)
-        button.setOnClickListener {
-            commandListener.onGameCommand(command)
-        }
-        panel.addView(button)
-    }
-
-    private fun panel(activity: Activity): LinearLayout {
-        return LinearLayout(activity).apply {
-            setPadding(dp(5), dp(5), dp(5), dp(5))
-            background = GradientDrawable().apply {
-                setColor(Color.argb(95, 8, 12, 18))
-                cornerRadius = dp(14).toFloat()
-            }
-        }
-    }
-
-    private fun createButton(label: String): Button {
-        return Button(context).apply {
+        val button = Button(context).apply {
             text = label
-            textSize = 10f
+            textSize = 9f
+            isAllCaps = false
             setTextColor(Color.WHITE)
             typeface = Typeface.DEFAULT_BOLD
-            isAllCaps = false
-            minWidth = dp(112)
-            minimumWidth = dp(112)
-            minHeight = dp(42)
-            minimumHeight = dp(42)
-            setPadding(dp(8), dp(3), dp(8), dp(3))
-            background = GradientDrawable().apply {
-                setColor(Color.argb(205, 20, 42, 65))
-                cornerRadius = dp(9).toFloat()
-                setStroke(dp(1), Color.argb(180, 220, 235, 255))
-            }
-            stateListAnimator = null
-        }
-    }
+            setPadding(5, 2, 5, 2)
 
-    private fun dp(value: Int): Int =
-        (value * resources.displayMetrics.density).toInt()
+            background = GradientDrawable().apply {
+                setColor(Color.argb(205, 20, 65, 42))
+                cornerRadius = 12f
+                setStroke(1, Color.argb(190, 210, 230, 210))
+            }
+
+            setOnClickListener {
+                commandListener.onGameCommand(command)
+            }
+        }
+
+        val params = LinearLayout.LayoutParams(
+            LayoutParams.WRAP_CONTENT,
+            42
+        )
+        params.setMargins(3, 3, 3, 3)
+        panel.addView(button, params)
+    }
 }
 
-/**
- * Activité hôte du futur écran de match.
- *
- * Elle fournit déjà le HUD tactile. Les commandes sont volontairement
- * centralisées dans onGameCommand() pour permettre leur raccordement au
- * contrôleur de match sans changer l'interface.
- */
 class GameActivity : Activity(), GameCommandListener {
 
-    private lateinit var root: FrameLayout
+    private lateinit var gameView: GLSurfaceView
+    private lateinit var renderer: DK26Renderer
     private lateinit var statusText: TextView
+
+    private var lastShotPower = 0.65f
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        requestedOrientation =
-            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-
-        window.addFlags(
-            android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-        )
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         @Suppress("DEPRECATION")
         window.decorView.systemUiVisibility =
@@ -190,40 +145,135 @@ class GameActivity : Activity(), GameCommandListener {
                 View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
                 View.SYSTEM_UI_FLAG_LAYOUT_STABLE
 
-        root = FrameLayout(this).apply {
-            setBackgroundColor(Color.rgb(8, 35, 20))
-        }
+        val root = FrameLayout(this)
 
-        statusText = TextView(this).apply {
-            text = "DK 26  •  ÉCRAN DE MATCH"
-            textSize = 18f
-            setTextColor(Color.WHITE)
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            setPadding(dp(12), dp(18), dp(12), dp(12))
+        renderer = DK26Renderer()
+
+        gameView = GLSurfaceView(this).apply {
+            setEGLContextClientVersion(2)
+            setRenderer(renderer)
+            renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
+            preserveEGLContextOnPause = true
         }
 
         root.addView(
-            statusText,
+            gameView,
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP
+                FrameLayout.LayoutParams.MATCH_PARENT
             )
         )
 
-        // HUD tactile prêt. Le moteur de match sera placé sous cette couche.
-        root.addView(GameControlsOverlay(this, this))
+        statusText = TextView(this).apply {
+            text = "DK 26  |  MATCH"
+            textSize = 15f
+            setTextColor(Color.WHITE)
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(16, 10, 16, 10)
+            background = GradientDrawable().apply {
+                setColor(Color.argb(175, 5, 20, 12))
+                cornerRadius = 12f
+            }
+        }
+
+        val statusParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        )
+        statusParams.topMargin = 12
+
+        root.addView(statusText, statusParams)
+
+        val controls = GameControlsOverlay(this, this)
+
+        root.addView(
+            controls,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+
         setContentView(root)
     }
 
     override fun onGameCommand(command: GameCommand) {
-        // Point d'entrée unique pour relier les commandes au moteur.
-        // Ne simule pas encore une action : aucune connexion au moteur
-        // de match n'est présente dans le projet à cette étape.
-        statusText.text = "DK 26  •  COMMANDE : ${command.name.replace('_', ' ')}"
+        when (command) {
+
+            GameCommand.SHOOT -> {
+                lastShotPower = 0.65f
+                shoot(0f, lastShotPower, "TIR")
+            }
+
+            GameCommand.SHOOT_POWER -> {
+                lastShotPower = 1f
+                shoot(0f, lastShotPower, "TIR PUISSANT")
+            }
+
+            GameCommand.SHOOT_PLACED -> {
+                lastShotPower = 0.48f
+                shoot(0.25f, lastShotPower, "TIR PLACE")
+            }
+
+            GameCommand.SHOOT_VOLLEY -> {
+                lastShotPower = 0.85f
+                shoot(0f, lastShotPower, "VOLEE")
+            }
+
+            GameCommand.PASS_SHORT ->
+                showPending("PASSE COURTE")
+
+            GameCommand.PASS_THROUGH ->
+                showPending("PASSE EN PROFONDEUR")
+
+            GameCommand.PASS_LONG ->
+                showPending("PASSE LONGUE")
+
+            GameCommand.CROSS ->
+                showPending("CENTRE")
+
+            GameCommand.TACKLE_STANDING ->
+                showPending("TACLE")
+
+            GameCommand.TACKLE_SLIDE ->
+                showPending("GLISSADE")
+
+            GameCommand.PRESSING_ON ->
+                showPending("PRESSING")
+
+            GameCommand.PRESSING_OFF ->
+                showPending("PRESSING DESACTIVE")
+        }
     }
 
-    private fun dp(value: Int): Int =
-        (value * resources.displayMetrics.density).toInt()
+    private fun shoot(
+        horizontalAim: Float,
+        power: Float,
+        label: String
+    ) {
+        gameView.queueEvent {
+            renderer.shootBall(horizontalAim, power)
+        }
+
+        statusText.text = "DK 26  |  $label"
+    }
+
+    private fun showPending(label: String) {
+        statusText.text = "DK 26  |  $label : INTEGRATION A VENIR"
+    }
+
+    override fun onPause() {
+        if (::gameView.isInitialized) {
+            gameView.onPause()
+        }
+        super.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::gameView.isInitialized) {
+            gameView.onResume()
+        }
+    }
 }
